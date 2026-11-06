@@ -1,0 +1,55 @@
+# Copy to watchlist.toml and edit. Restaurants only; all dates/times are Tokyo time (JST).
+# Run options and the email account live in settings.toml.
+
+[defaults]
+party_size = 2
+notify = ["me"]          # who gets emailed: group names from settings.toml and/or addresses
+# Windows applied to any restaurant that doesn't define its own.
+[[defaults.windows]]
+start_date = "2026-11-20"
+end_date   = "2026-11-25"
+start_time = "18:00"
+end_time   = "21:00"
+
+# --- TableCheck: give the shop URL or its slug ------------------------------
+[[restaurants]]
+name = "Wakanui Tokyo"
+url  = "https://www.tablecheck.com/en/shops/wakanui-tokyo/reserve"
+party_size = 2
+notify = ["family", "friend@example.com"]   # this restaurant alerts these people
+  [[restaurants.windows]]           # dinner on Fri/Sat only
+  start_date = "2026-11-20"
+  end_date   = "2026-11-28"
+  start_time = "18:00"
+  end_time   = "20:30"
+  weekdays   = ["fri", "sat"]
+  [[restaurants.windows]]           # or lunch on one specific day
+  date       = "2026-11-22"
+  start_time = "11:30"
+  end_time   = "13:30"
+  [[restaurants.windows]]           # or: rolling - today + next 13 days (Tokyo), moves forward daily
+  days       = 14
+  start_time = "18:00"
+  end_time   = "21:00"
+
+[[restaurants]]
+name = "Kamikatz Taproom"
+platform = "tablecheck"
+id = "kamikatz"                    # timetable off -> slow per-time checks (~1s per start time)
+enabled = false                    # sample only
+# menu_item_id = "68eb44a79f7d568b2735307a"   # pin a course (see `jap r menus kamikatz`)
+
+# --- Tabelog: any tabelog URL (English or Japanese) or the 8-digit id -------
+[[restaurants]]
+name = "Tabelog example"
+url  = "https://tabelog.com/en/tokyo/A1301/A130101/13277198/"
+party_size = 1
+notify = []                        # empty list = settings.toml default_to
+# seat_only = true                 # optional: only seat-only bookings
+# plan_id = "123456"               # optional: a specific course plan
+
+# --- OMAKASE: needs `jap restaurants omakase-login` first (parser pending) --
+[[restaurants]]
+name = "Some OMAKASE place"
+url  = "https://omakase.in/en/r/xxxxxx"
+enabled = false

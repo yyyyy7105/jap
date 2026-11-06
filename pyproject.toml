@@ -1,0 +1,32 @@
+[project]
+name = "jap"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "yy", email = "leoyang105@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "beautifulsoup4>=4.15.0",
+    "httpx>=0.28.1",
+    "rich>=15.0.0",
+]
+
+[project.scripts]
+jap = "jap:main"
+
+[project.optional-dependencies]
+omakase = [
+    "playwright>=1.64.1",
+]
+
+[build-system]
+requires = ["uv_build>=0.9.5,<0.10.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+    "respx>=0.23.1",
+]

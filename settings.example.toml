@@ -1,0 +1,27 @@
+# Copy to settings.toml (git-ignored) and edit.
+# Restaurants live in watchlist.toml; this file is how the tool runs + email.
+
+[settings]
+interval_seconds = 600   # watch mode: seconds between rounds (+-15% jitter)
+request_delay = 0.4      # pause between HTTP requests, be polite
+headless = true          # OMAKASE browser runs hidden
+
+# --- Email notifications (optional) -----------------------------------------
+# Who gets which restaurant is set per restaurant in watchlist.toml (`notify`).
+# Turn on per run with --email, or set enabled = true (--no-email skips a run).
+# Gmail: use an App Password (Google Account > Security > 2-Step Verification > App passwords).
+[email]
+enabled = false
+send_at = "00:00"          # daily digest time (this computer's clock): all open slots, NEW first
+send_empty = true          # also email on days with nothing open (false = skip those days)
+from = "you@gmail.com"
+username = "you@gmail.com"
+smtp_host = "smtp.gmail.com"
+smtp_port = 587            # 587 = STARTTLS, 465 = SSL
+password = "your-app-password"   # or leave out and set JAP_SMTP_PASSWORD in the environment / .env
+default_to = ["you@gmail.com"]   # for restaurants with no `notify` list
+
+# Named recipient lists; `notify` in watchlist.toml can use these names.
+[email.groups]
+me = ["you@gmail.com"]
+family = ["you@gmail.com", "partner@example.com"]

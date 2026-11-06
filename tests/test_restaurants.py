@@ -1,0 +1,252 @@
+from datetime import date, time
+
+import httpx
+import pytest
+import respx
+
+from jap.restaurants.checker import SeenStore
+from jap.restaurants.config import ConfigError, id_from_url, load_watchlist
+from jap.restaurants.models import CheckResult, Restaurant, Slot, Window
+from jap.restaurants.providers import TabelogProvider, TableCheckProvider
+
+
+def W(**kw):
+    base = dict(start_date=date(2026, 11, 20), end_date=date(2026, 11, 22), start_time=time(18), end_time=time(20))
+    return Window(**(base | kw))
+
+
+def R(platform="tablecheck", rid="shop", windows=None, **kw):
+    return Restaurant(name="Test", platform=platform, id=rid, party_size=2, windows=tuple(windows or [W()]), **kw)
+
+
+# -- config --------------------------------------------------------------
+def test_load_watchlist(tmp_path):
+    p = tmp_path / "w.toml"
+    p.write_text(
+        """
+[defaults]
+party_size = 3
+[[defaults.windows]]
+date = "2026-11-20"
+[[restaurants]]
+url = "https://www.tablecheck.com/en/shops/wakanui-tokyo/reserve"
+[[restaurants]]
+name = "T"
+url = "https://tabelog.com/tokyo/A1301/A130101/13277198/"
+party_size = 1
+seat_only = true
+  [[restaurants.windows]]
+  start_date = "2026-11-20"
+  end_date = "2026-11-21"
+  start_time = "18:00"
+  end_time = "21:00"
+  weekdays = ["Sat"]
+[[restaurants]]
+platform = "omakase"
+id = "x"
+enabled = false
+""",
+        encoding="utf-8",
+    )
+    rs = load_watchlist(p)
+    assert [(r.platform, r.id, r.party_size) for r in rs] == [("tablecheck", "wakanui-tokyo", 3), ("tabelog", "13277198", 1)]
+    assert rs[1].options == {"seat_only": True}
+    assert rs[1].dates() == [date(2026, 11, 21)]  # Saturday only
+
+
+def test_config_errors(tmp_path):
+    p = tmp_path / "w.toml"
+    p.write_text('[[restaurants]]\nplatform="tablecheck"\nid="x"\n', encoding="utf-8")
+    with pytest.raises(ConfigError, match="no watch windows"):
+        load_watchlist(p)
+
+
+def test_id_from_url():
+    assert id_from_url("omakase", "https://omakase.in/en/r/ab123") == "ab123"
+    assert id_from_url("tabelog", "https://tabelog.com/en/tokyo/A1301/A130101/13277198/") == "13277198"
+
+
+def test_window_filter():
+    r = R(windows=[W(weekdays=frozenset({4}))])  # Fridays
+    assert r.wants(date(2026, 11, 20), time(19))
+    assert not r.wants(date(2026, 11, 20), time(20, 30))
+    assert not r.wants(date(2026, 11, 21), time(19))
+
+
+# -- TableCheck ----------------------------------------------------------
+# 1795168800 = 2026-11-20 19:00 JST
+@respx.mock
+def test_tablecheck_timetable():
+    respx.get("https://www.tablecheck.com/en/shops/shop/available/timetable").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "slots": {
+                        "2026-11-20": {
+                            "1795168800": {"available": True, "meal": "dinner"},
+                            "1795170600": {"available": False, "meal": "dinner"},
+                            "1795141800": {"available": True, "meal": "lunch"},  # 11:30, outside window
+                        },
+                        "2026-11-21": {"1795255200": {"available": True, "meal": "dinner"}},  # 19:00
+                        "2026-11-22": {},
+                    }
+                }
+            },
+        )
+    )
+    slots = TableCheckProvider(delay=0).fetch(R())
+    assert [(s.date, s.time) for s in slots] == [(date(2026, 11, 20), time(19)), (date(2026, 11, 21), time(19))]
+    assert "start_time=19:00" in slots[0].url
+
+
+@respx.mock
+def test_tablecheck_fallback_per_time():
+    respx.get("https://www.tablecheck.com/en/shops/shop/available/timetable").mock(
+        return_value=httpx.Response(200, json={"status": "disabled"})
+    )
+    html = """<select name="reservation[start_at_epoch]"><option value="">-</option>
+      <option value="1795168800">7:00 PM</option><option value="1795176000">9:00 PM</option></select>
+      <div class="menu-item"><div class="menu-item-name">Seats only</div>
+      <input name="reservation[orders_attributes][0][menu_item_id]" value="m1"></div>"""
+    respx.get("https://www.tablecheck.com/en/shops/shop/reserve").mock(return_value=httpx.Response(200, text=html))
+
+    def avail(request):
+        if "menu_item_id" in str(request.url):
+            return httpx.Response(200, json={"status": "success", "data": ["x"]})
+        return httpx.Response(200, json={"status": "warn", "data": "require_order"})
+
+    respx.get("https://www.tablecheck.com/en/shops/shop/available").mock(side_effect=avail)
+    r = R(windows=[W(end_date=date(2026, 11, 20))])
+    slots = TableCheckProvider(delay=0).fetch(r)
+    assert [(s.time, s.detail) for s in slots] == [(time(19), "Seats only")]  # 21:00 is outside window
+
+
+# -- Tabelog -------------------------------------------------------------
+@respx.mock
+def test_tabelog():
+    base = "https://tabelog.com/en/booking/calendar"
+    respx.get(f"{base}/find_vacancy_date_with_status/").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "list": [
+                    {"year": 2026, "month": 11, "day": 20, "available": 2},
+                    {"year": 2026, "month": 11, "day": 21, "available": 0},
+                    {"year": 2026, "month": 11, "day": 22, "available": 1},
+                ]
+            },
+        )
+    )
+    route = respx.get(f"{base}/find_vacancy/").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "members": 2,
+                "selection": {
+                    "a": {"time": "17:00", "url": "/en/booking/x?visit_time=1700"},
+                    "b": {"time": "19:00", "url": "https://tabelog.com/en/booking/y"},
+                },
+            },
+        )
+    )
+    slots = TabelogProvider(delay=0).fetch(R("tabelog", "13277198"))
+    assert route.call_count == 2  # the full day (21st) is skipped
+    assert [(s.date.day, s.time, s.detail) for s in slots] == [(20, time(19), "few left"), (22, time(19), "")]
+
+
+# -- seen tracking -------------------------------------------------------
+def test_seen_store(tmp_path):
+    a, b = R(), Restaurant("Other", "tabelog", "1", 2, (W(),))
+    s1 = Slot(date(2026, 11, 20), time(19), "Test", "tablecheck", 2)
+    s2 = Slot(date(2026, 11, 20), time(19), "Other", "tabelog", 2)
+    store = SeenStore(tmp_path / "seen.json")
+    store.update([CheckResult(a, [s1]), CheckResult(b, [s2])])
+
+    store = SeenStore(tmp_path / "seen.json")
+    assert store.split([s1]) == ([], [s1])
+    store.update([CheckResult(a, [])])  # only `a` checked: b's memory survives
+    assert s2.key in store.seen and s1.key not in store.seen
+    store.update([CheckResult(b, error="boom")])  # errors don't wipe memory
+    assert s2.key in store.seen
+
+
+def test_watchlist_notify_and_split(tmp_path):
+    from jap.restaurants.config import load_settings
+
+    p = tmp_path / "w.toml"
+    p.write_text(
+        '[defaults]\nnotify = ["me"]\n[[defaults.windows]]\ndate = "2026-11-20"\n'
+        '[[restaurants]]\nplatform = "tablecheck"\nid = "a"\n'
+        '[[restaurants]]\nplatform = "tablecheck"\nid = "b"\nnotify = ["fam", "x@y.com"]\n',
+        encoding="utf-8",
+    )
+    a, b = load_watchlist(p)
+    assert a.notify == ("me",) and b.notify == ("fam", "x@y.com")
+
+    p.write_text(p.read_text(encoding="utf-8") + '[settings]\ninterval_seconds = 5\n', encoding="utf-8")
+    with pytest.raises(ConfigError, match="settings.toml"):
+        load_watchlist(p)
+
+    assert load_settings(tmp_path / "missing.toml") == {}
+    s = tmp_path / "s.toml"
+    s.write_text('[settings]\ninterval_seconds = 5\n[email]\nusername = "a@b.c"\n', encoding="utf-8")
+    assert load_settings(s)["interval_seconds"] == 5 and load_settings(s)["email"]["username"] == "a@b.c"
+
+
+def test_rolling_days_window(tmp_path):
+    from datetime import timedelta
+
+    from jap.restaurants.models import today_jst
+
+    p = tmp_path / "w.toml"
+    p.write_text(
+        '[[restaurants]]\nplatform = "tablecheck"\nid = "a"\n'
+        '  [[restaurants.windows]]\n  days = 3\n  start_time = "18:00"\n  end_time = "20:00"\n',
+        encoding="utf-8",
+    )
+    (r,) = load_watchlist(p)
+    w = r.windows[0]
+    assert w.rolling_days == 3
+
+    # rolls with "today": computed per call, not frozen at load time
+    assert list(w.dates(today=date(2026, 11, 6))) == [date(2026, 11, 6), date(2026, 11, 7), date(2026, 11, 8)]
+    assert list(w.dates(today=date(2026, 11, 30)))[-1] == date(2026, 12, 2)
+    assert w.contains(date(2026, 11, 8), time(19), today=date(2026, 11, 6))
+    assert not w.contains(date(2026, 11, 9), time(19), today=date(2026, 11, 6))
+    assert not w.contains(date(2026, 11, 7), time(21), today=date(2026, 11, 6))
+
+    t = today_jst()  # default uses Tokyo's today
+    assert r.dates() == [t, t + timedelta(days=1), t + timedelta(days=2)]
+
+
+@pytest.mark.parametrize(
+    "body, msg",
+    [
+        ("days = 0", "between 1 and 366"),
+        ('days = "two"', "whole number"),
+        ('days = 5\n  date = "2026-11-20"', "only one of"),
+    ],
+)
+def test_rolling_days_errors(tmp_path, body, msg):
+    p = tmp_path / "w.toml"
+    p.write_text(f'[[restaurants]]\nplatform = "tablecheck"\nid = "a"\n  [[restaurants.windows]]\n  {body}\n', encoding="utf-8")
+    with pytest.raises(ConfigError, match=msg):
+        load_watchlist(p)
+
+
+@respx.mock
+def test_tablecheck_overlapping_timetable_no_duplicates():
+    """Regression: overlapping timetable responses must not duplicate slots."""
+    payload = {"data": {"slots": {
+        "2026-11-20": {"1795168800": {"available": True, "meal": "dinner"}},
+        "2026-11-21": {"1795255200": {"available": True, "meal": "dinner"}},
+    }}}
+    route = respx.get("https://www.tablecheck.com/en/shops/shop/available/timetable").mock(
+        return_value=httpx.Response(200, json=payload)
+    )
+    # 20th..23rd: the 22nd isn't in the response, so a second request is made and returns the same days again
+    r = R(windows=[W(end_date=date(2026, 11, 23))])
+    slots = TableCheckProvider(delay=0).fetch(r)
+    assert route.call_count >= 2
+    assert [(s.date.day, s.time) for s in slots] == [(20, time(19)), (21, time(19))]

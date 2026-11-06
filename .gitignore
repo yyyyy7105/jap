@@ -1,0 +1,16 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# app state (seen slots, browser profiles, probes)
+.state/
+watchlist.toml
+.env
+settings.toml
