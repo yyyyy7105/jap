@@ -38,7 +38,6 @@ platform = "tablecheck"
 id = "kamikatz"                    # timetable off -> slow per-time checks (~1s per start time)
 enabled = false                    # sample only
 # menu_item_id = "68eb44a79f7d568b2735307a"   # pin a course (see `jap r menus kamikatz`)
-# service_type = "counter"                     # or ["counter", "private room"]; labels from `jap r menus`
 
 # --- Tabelog: any tabelog URL (English or Japanese) or the 8-digit id -------
 [[restaurants]]

@@ -7,7 +7,7 @@ import respx
 from jap.restaurants.checker import SeenStore
 from jap.restaurants.config import ConfigError, id_from_url, load_watchlist
 from jap.restaurants.models import CheckResult, Restaurant, Slot, Window
-from jap.restaurants.providers import PocketConciergeProvider, ProviderError, TabelogProvider, TableCheckProvider
+from jap.restaurants.providers import PocketConciergeProvider, TabelogProvider, TableCheckProvider
 
 
 def W(**kw):
@@ -100,73 +100,6 @@ def test_tablecheck_timetable():
     slots = TableCheckProvider(delay=0).fetch(R())
     assert [(s.date, s.time) for s in slots] == [(date(2026, 11, 20), time(19)), (date(2026, 11, 21), time(19))]
     assert "start_time=19:00" in slots[0].url
-
-
-TYPES_HTML = """<label><input type="radio" name="reservation[service_category]" value="c1"> Counter (1-5)</label>
-<label><input type="radio" name="reservation[service_category]" value="p1"> Private (4-7)</label>
-<label><input type="radio" name="reservation[service_category]" value="p2"> Semi-private</label>"""
-
-
-@respx.mock
-def test_tablecheck_service_type():
-    reserve = respx.get("https://www.tablecheck.com/en/shops/shop/reserve").mock(
-        return_value=httpx.Response(200, text=TYPES_HTML)
-    )
-    open_by_type = {  # 19:00 open for counter and private, 19:30 counter only, 18:00 private only
-        None: ["1795168800", "1795170600", "1795165200"],
-        "c1": ["1795168800", "1795170600"],
-        "p1": ["1795168800", "1795165200"],
-        "p2": [],
-    }
-
-    def timetable(request):
-        cat = request.url.params.get("reservation[service_category]")
-        eps = open_by_type[cat]
-        return httpx.Response(200, json={"data": {"slots": {"2026-11-20": {e: {"available": True, "meal": "dinner"} for e in eps}}}})
-
-    respx.get("https://www.tablecheck.com/en/shops/shop/available/timetable").mock(side_effect=timetable)
-    p = TableCheckProvider(delay=0)
-
-    # no option: unchanged, no reserve-page request
-    assert [(s.time, s.detail) for s in p.fetch(R())] == [(time(18), "dinner"), (time(19), "dinner"), (time(19, 30), "dinner")]
-    assert reserve.call_count == 0
-
-    counter = p.fetch(R(options={"service_type": "counter"}))
-    assert [(s.time, s.detail) for s in counter] == [(time(19), "dinner · Counter (1-5)"), (time(19, 30), "dinner · Counter (1-5)")]
-
-    both = p.fetch(R(options={"service_type": ["Counter (1-5)", "p1"]}))
-    assert [(s.time, s.detail) for s in both] == [
-        (time(18), "dinner · Private (4-7)"),
-        (time(19), "dinner · Counter (1-5), Private (4-7)"),
-        (time(19, 30), "dinner · Counter (1-5)"),
-    ]
-    assert reserve.call_count == 1  # service types are read once per shop
-
-    with pytest.raises(ProviderError, match="matches several"):
-        p.fetch(R(options={"service_type": "private"}))
-    with pytest.raises(ProviderError, match="this shop has: 'Counter"):
-        p.fetch(R(options={"service_type": "terrace"}))
-
-
-@respx.mock
-def test_tablecheck_per_time_asks_for_service_type():
-    respx.get("https://www.tablecheck.com/en/shops/shop/available/timetable").mock(
-        return_value=httpx.Response(200, json={"status": "disabled"})
-    )
-    html = TYPES_HTML + """<select name="reservation[start_at_epoch]"><option value="1795168800">7:00 PM</option></select>"""
-    respx.get("https://www.tablecheck.com/en/shops/shop/reserve").mock(return_value=httpx.Response(200, text=html))
-
-    def avail(request):
-        if request.url.params.get("reservation[service_category]") == "c1":
-            return httpx.Response(200, json={"status": "success", "data": ["x"]})
-        return httpx.Response(200, json={"status": "warn", "data": "require_service_category"})
-
-    respx.get("https://www.tablecheck.com/en/shops/shop/available").mock(side_effect=avail)
-    r = R(windows=[W(end_date=date(2026, 11, 20))])
-    with pytest.raises(ProviderError, match=r"asks for a service type.*Counter \(1-5\)"):
-        TableCheckProvider(delay=0).fetch(r)
-    ok = TableCheckProvider(delay=0).fetch(R(windows=[W(end_date=date(2026, 11, 20))], options={"service_type": "counter"}))
-    assert [(s.time, s.detail) for s in ok] == [(time(19), "Counter (1-5)")]
 
 
 @respx.mock

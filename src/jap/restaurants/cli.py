@@ -34,7 +34,7 @@ def register(sub: argparse._SubParsersAction) -> None:
     rs.add_parser("digest", help="check now and send everyone their digest email immediately")
     t = rs.add_parser("test-email", help="send a test email (default: everyone any restaurant notifies)")
     t.add_argument("--to", action="append", default=[], help="address or group to send to instead")
-    m = rs.add_parser("menus", help="list a TableCheck shop's service types and course ids")
+    m = rs.add_parser("menus", help="list a TableCheck shop's course ids (for `menu_item_id`)")
     m.add_argument("shop", help="TableCheck slug or URL")
     m.add_argument("--date", default=None, help="YYYY-MM-DD (default: today)")
     rs.add_parser("omakase-login", help="open a browser to sign in to OMAKASE (session is saved)")
@@ -87,19 +87,11 @@ def run(args) -> int:
         slug = id_from_url("tablecheck", args.shop) if "/" in args.shop else args.shop
         d = date.fromisoformat(args.date) if args.date else date.today()
         prov = TableCheckProvider()
-        shop = Restaurant(slug, "tablecheck", slug, 2, ())
-        _, menu = prov._reserve_page(shop, d)
-        types = prov.service_types(shop, d)
-        console.print("[bold]Service types[/] (for `service_type`):")
-        if not types:
-            console.print("  none - this shop doesn't split seating")
-        for tid, label in types:
-            console.print(f"  {tid}  {label}")
-        console.print("[bold]Courses[/] (for `menu_item_id`):")
+        _, menu = prov._reserve_page(Restaurant(slug, "tablecheck", slug, 2, ()), d)
         if not menu:
-            console.print("  none found (the shop may not require one)")
+            console.print("No course menu items found (the shop may not require one).")
         for mid, label in menu:
-            console.print(f"  {mid}  {label}")
+            console.print(f"{mid}  {label}")
         return 0
 
     load_dotenv()
