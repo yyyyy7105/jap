@@ -48,6 +48,13 @@ notify = []                        # empty list = settings.toml default_to
 # seat_only = true                 # optional: only seat-only bookings
 # plan_id = "123456"               # optional: a specific course plan
 
+# --- Pocket Concierge: the restaurant page URL (or platform = "pocketconcierge" + numeric id)
+[[restaurants]]
+name = "Kikuzushi"
+url  = "https://www.pocket-concierge.jp/en/restaurants/244273"
+party_size = 1
+# include_waitlist = true          # optional: also report waitlist-only seatings
+
 # --- OMAKASE: needs `jap restaurants omakase-login` first (parser pending) --
 [[restaurants]]
 name = "Some OMAKASE place"

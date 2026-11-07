@@ -49,8 +49,14 @@ class Provider(ABC):
 
     def get(self, url: str, *, retries: int = 3, **kw) -> httpx.Response:
         """GET with polite backoff on 429/503 (honours Retry-After)."""
+        return self.request("GET", url, retries=retries, **kw)
+
+    def post(self, url: str, *, retries: int = 3, **kw) -> httpx.Response:
+        return self.request("POST", url, retries=retries, **kw)
+
+    def request(self, method: str, url: str, *, retries: int = 3, **kw) -> httpx.Response:
         for attempt in range(retries + 1):
-            resp = self.client.get(url, **kw)
+            resp = self.client.request(method, url, **kw)
             if resp.status_code not in (429, 503) or attempt == retries:
                 return resp
             try:

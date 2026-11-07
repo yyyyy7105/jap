@@ -7,7 +7,7 @@ import respx
 from jap.restaurants.checker import SeenStore
 from jap.restaurants.config import ConfigError, id_from_url, load_watchlist
 from jap.restaurants.models import CheckResult, Restaurant, Slot, Window
-from jap.restaurants.providers import TabelogProvider, TableCheckProvider
+from jap.restaurants.providers import PocketConciergeProvider, TabelogProvider, TableCheckProvider
 
 
 def W(**kw):
@@ -64,6 +64,8 @@ def test_config_errors(tmp_path):
 def test_id_from_url():
     assert id_from_url("omakase", "https://omakase.in/en/r/ab123") == "ab123"
     assert id_from_url("tabelog", "https://tabelog.com/en/tokyo/A1301/A130101/13277198/") == "13277198"
+    assert id_from_url("pocketconcierge", "https://www.pocket-concierge.jp/en/restaurants/244273?date=x") == "244273"
+    assert id_from_url("pocketconcierge", "https://pocket-concierge.jp/restaurants/244273") == "244273"
 
 
 def test_window_filter():
@@ -153,6 +155,57 @@ def test_tabelog():
     slots = TabelogProvider(delay=0).fetch(R("tabelog", "13277198"))
     assert route.call_count == 2  # the full day (21st) is skipped
     assert [(s.date.day, s.time, s.detail) for s in slots] == [(20, time(19), "few left"), (22, time(19), "")]
+
+
+@respx.mock
+def test_pocketconcierge():
+    import json
+
+    def seat(day, hhmm, lo=1, hi=2, kind="ReservableAvailability", name=" Omakase Course ", svc="DINNER"):
+        return {
+            "__typename": kind,
+            "startTime": f"2026-11-{day}T{hhmm}:00+09:00",
+            "seatingType": "COUNTER",
+            "minPartySize": lo,
+            "maxPartySize": hi,
+            "course": {"id": "1", "name": name, "costPerGuest": 29700, "serviceType": svc},
+        }
+
+    by_date = {
+        "2026-11-20": [seat(20, "18:00"), seat(20, "18:00", name="Special"), seat(20, "21:00")],  # 21:00 outside window
+        "2026-11-22": [seat(22, "19:00", lo=1, hi=1)],  # party of 2 doesn't fit
+        "2026-11-21": [seat(21, "18:30", kind="WaitlistableAvailability")],
+    }
+    asked = []
+
+    def gql(request):
+        body = json.loads(request.content)
+        if "availabilityCalendar" in body["query"]:
+            cal = {"reservationDates": ["2026-11-20", "2026-11-22", "2026-12-30"], "waitlistDates": ["2026-11-21"]}
+            return httpx.Response(200, json={"data": {"venue": {"availabilityCalendar": cal}}})
+        asked.append(body["variables"]["date"])
+        return httpx.Response(200, json={"data": {"availabilitySearch": by_date[body["variables"]["date"]]}})
+
+    respx.post("https://www.pocket-concierge.jp/graphql").mock(side_effect=gql)
+    slots = PocketConciergeProvider(delay=0).fetch(R("pocketconcierge", "244273"))
+    assert asked == ["2026-11-20", "2026-11-22"]  # only open dates inside the window; waitlist skipped
+    assert [(s.date.day, s.time) for s in slots] == [(20, time(18))]
+    assert slots[0].detail == "dinner · Omakase Course · ¥29,700 · counter; dinner · Special · ¥29,700 · counter"
+    assert slots[0].url.endswith("/en/restaurants/244273?date=2026-11-20&partySize=2")
+
+    asked.clear()
+    w = PocketConciergeProvider(delay=0).fetch(R("pocketconcierge", "244273", options={"include_waitlist": True}))
+    assert asked == ["2026-11-20", "2026-11-21", "2026-11-22"]
+    assert [(s.date.day, s.detail.split(" · ")[0]) for s in w] == [(20, "dinner"), (21, "waitlist")]
+
+
+@respx.mock
+def test_pocketconcierge_unknown_venue():
+    from jap.restaurants.providers import ProviderError
+
+    respx.post("https://www.pocket-concierge.jp/graphql").mock(return_value=httpx.Response(200, json={"data": {"venue": None}}))
+    with pytest.raises(ProviderError, match="no restaurant"):
+        PocketConciergeProvider(delay=0).fetch(R("pocketconcierge", "1"))
 
 
 # -- seen tracking -------------------------------------------------------

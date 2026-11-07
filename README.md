@@ -16,6 +16,7 @@ dates and times you're watching for each one. All dates and times are Tokyo loca
 |------------|---------------|--------|
 | TableCheck | public JSON timetable. If a shop has it switched off, it checks each start time (optionally for a pinned course) | working |
 | Tabelog    | the English site's booking-calendar JSON | working |
+| Pocket Concierge | the site's GraphQL API: open dates in one request, then the seatings on each open date | working |
 | OMAKASE    | real browser using your own login (Playwright) | login and capture work; slot parser not written yet |
 
 ### Setup
@@ -81,6 +82,8 @@ if it fits any of them. Restaurants without windows use `[[defaults.windows]]`.
 Per-platform options:
 - **TableCheck** `menu_item_id = "..."`: pin a course for shops that require one. This cuts requests a lot. Find IDs with `uv run jap r menus <slug-or-url> --date YYYY-MM-DD`.
 - **Tabelog** `seat_only = true`, `plan_id = "..."`.
+- **Pocket Concierge** `include_waitlist = true`: also report waitlist-only seatings (marked "waitlist"). Only seatings
+  whose allowed party size fits `party_size` are reported. Members-only "secret seats" aren't checked.
 
 ### Email: new-slot alerts + daily digest
 

@@ -10,7 +10,7 @@ from typing import Any
 
 from .models import WEEKDAYS, Restaurant, Window
 
-PLATFORMS = {"tablecheck", "tabelog", "omakase"}
+PLATFORMS = {"tablecheck", "tabelog", "pocketconcierge", "omakase"}
 
 
 class ConfigError(ValueError):
@@ -81,6 +81,7 @@ def id_from_url(platform: str, url: str) -> str:
         "tablecheck": r"tablecheck\.com/(?:[a-z]{2}(?:-[a-zA-Z]+)?/)?(?:shops/)?(?!shops\b)([^/?#]+)",
         "tabelog": r"tabelog\.com/.*?/(\d{8})(?:/|$|\?)",
         "omakase": r"omakase\.in/(?:[a-z]{2}/)?r/([^/?#]+)",
+        "pocketconcierge": r"pocket-concierge\.jp/(?:[a-z]{2}(?:-[a-zA-Z]+)?/)?restaurants/(\d+)",
     }
     m = re.search(patterns[platform], url)
     if not m:
@@ -89,7 +90,12 @@ def id_from_url(platform: str, url: str) -> str:
 
 
 def detect_platform(url: str) -> str | None:
-    for p, host in (("tablecheck", "tablecheck.com"), ("tabelog", "tabelog.com"), ("omakase", "omakase.in")):
+    for p, host in (
+        ("tablecheck", "tablecheck.com"),
+        ("tabelog", "tabelog.com"),
+        ("omakase", "omakase.in"),
+        ("pocketconcierge", "pocket-concierge.jp"),
+    ):
         if host in url:
             return p
     return None
