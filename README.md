@@ -80,7 +80,12 @@ All three accept `start_time`, `end_time` and `weekdays`. A restaurant can have 
 if it fits any of them. Restaurants without windows use `[[defaults.windows]]`.
 
 Per-platform options:
-- **TableCheck** `menu_item_id = "..."`: pin a course for shops that require one. This cuts requests a lot. Find IDs with `uv run jap r menus <slug-or-url> --date YYYY-MM-DD`.
+- **TableCheck** (see a shop's choices with `uv run jap r menus <slug-or-url> --date YYYY-MM-DD`)
+  - `service_type = "counter"` or a list: only these service types, for shops that split seating (e.g. Counter /
+    Private room). Matches the shop's label, any case, or part of it if that's unambiguous ("counter" finds
+    "Counter (1-5)"), or the ID. Each type is checked separately (one set of requests per type), and Info says
+    which type a slot is for. Leave it out to check without a type (no extra requests).
+  - `menu_item_id = "..."`: pin a course for shops that require one. This cuts requests a lot.
 - **Tabelog** `seat_only = true`, `plan_id = "..."`.
 - **Pocket Concierge**
   - `seating = ["counter"]`: only these seating types. Choose from `counter`, `private counter`, `private room`,
