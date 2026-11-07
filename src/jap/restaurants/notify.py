@@ -45,7 +45,7 @@ class EmailConfig:
     password_inline: str = field(default="", repr=False)  # `password` key in settings.toml (git-ignored)
     sender: str = ""
     enabled: bool = False  # default for `watch` when no --email/--no-email flag
-    send_at: time = time(0, 0)  # daily digest time, this computer's local clock
+    send_at: time | None = time(0, 0)  # daily digest time, this computer's local clock; None = no daily digest
     send_empty: bool = True  # still email on days with nothing open (shows the watcher is alive)
     subject_prefix: str = "[jap]"
 
@@ -68,9 +68,13 @@ class EmailConfig:
         if security not in ("starttls", "ssl", "none"):
             raise NotifyError("[email] security must be starttls, ssl or none")
         username = raw.get("username", "")
-        m = re.fullmatch(r"(\d{1,2}):(\d{2})", str(raw.get("send_at", "00:00")).strip())
-        if not m or int(m[1]) > 23 or int(m[2]) > 59:
-            raise NotifyError(f"[email] send_at: expected HH:MM, got {raw.get('send_at')!r}")
+        raw_at = raw.get("send_at", "00:00")
+        send_at: time | None = None
+        if raw_at is not False and str(raw_at).strip().lower() not in ("off", "none", ""):
+            m = re.fullmatch(r"(\d{1,2}):(\d{2})", str(raw_at).strip())
+            if not m or int(m[1]) > 23 or int(m[2]) > 59:
+                raise NotifyError(f"[email] send_at: expected HH:MM or \"off\", got {raw_at!r}")
+            send_at = time(int(m[1]), int(m[2]))
         return cls(
             default_to=addrs(raw.get("default_to"), "default_to"),
             groups=groups,
@@ -82,7 +86,7 @@ class EmailConfig:
             password_inline=str(raw.get("password", "")).replace(" ", ""),
             sender=raw.get("from") or username,
             enabled=bool(raw.get("enabled", False)),
-            send_at=time(int(m[1]), int(m[2])),
+            send_at=send_at,
             send_empty=bool(raw.get("send_empty", True)),
             subject_prefix=raw.get("subject_prefix", "[jap]"),
         )
@@ -336,13 +340,17 @@ class DailyDigest:
     def _r(self, addr: str) -> dict:
         return self.state.setdefault(addr.lower(), {"last_sent": None, "alerted": [], "digested": []})
 
-    def next_send(self, now: datetime | None = None) -> datetime:
-        """The next send_at moment after `now` (for the countdown)."""
+    def next_send(self, now: datetime | None = None) -> datetime | None:
+        """The next send_at moment after `now` (for the countdown); None if the daily digest is off."""
+        if self.cfg.send_at is None:
+            return None
         now = now or datetime.now()
         at = datetime.combine(now.date(), self.cfg.send_at)
         return at if at > now else at + timedelta(days=1)
 
     def due(self, addr: str, now: datetime) -> bool:
+        if self.cfg.send_at is None:  # daily digest off: only alerts (and `jap r digest` on demand)
+            return False
         st = self._r(addr)
         if st["last_sent"] is None:
             # first time we see this person: alerts cover today, first digest at the next send_at

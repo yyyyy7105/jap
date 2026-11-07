@@ -215,10 +215,9 @@ def run(args) -> int:
         interval = args.interval or int(settings.get("interval_seconds", 600))
         mail = ""
         if use_email:
-            mail = (
-                f", emailing {len(all_recipients)} recipient(s): new slots right away"
-                f" + daily digest at {email_cfg.send_at:%H:%M}"
-            )
+            mail = f", emailing {len(all_recipients)} recipient(s): new slots right away"
+            if email_cfg.send_at is not None:
+                mail += f" + daily digest at {email_cfg.send_at:%H:%M}"
         console.print(f"Watching {len(restaurants)} restaurant(s) every ~{interval}s{mail}. Ctrl+C to stop.")
         while True:
             try:
@@ -235,7 +234,8 @@ def run(args) -> int:
                 from datetime import datetime
 
                 digest_at = digest.next_send()
-                wait = min(wait, (digest_at - datetime.now()).total_seconds() + 1)
+                if digest_at:
+                    wait = min(wait, (digest_at - datetime.now()).total_seconds() + 1)
             wait_with_countdown(max(wait, 1), digest_at)
     except KeyboardInterrupt:
         console.print("\nStopped.")

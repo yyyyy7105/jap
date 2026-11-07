@@ -110,7 +110,7 @@ restaurant with `notify` in `watchlist.toml`:
 ```toml
 # settings.toml
 [email]
-send_at = "00:00"                       # daily digest time
+send_at = "00:00"                       # daily digest time, or "off" for new-slot alerts only
 send_empty = true                       # also email "nothing open" days (false = skip them)
 username = "you@gmail.com"
 password = "your-app-password"

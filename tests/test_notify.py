@@ -256,3 +256,22 @@ def test_reads_old_state_file(tmp_path):
     p.write_text('{"recipients": {"me@x.com": {"last_sent": "2026-11-06", "emailed": ["k1"]}}}', encoding="utf-8")
     d = DailyDigest(cfg(), p)
     assert d._r("me@x.com") == {"last_sent": "2026-11-06", "alerted": ["k1"], "digested": ["k1"]}
+
+
+def test_daily_digest_off_only_alerts(tmp_path):
+    assert cfg(send_at="off").send_at is None
+    sent, sender = recorder()
+    d = DailyDigest(cfg(send_at="off"), tmp_path / "d.json", sender=sender)
+    a1, a2 = _slot(18, "A"), _slot(19, "A")
+    d.process([a1], EVERYONE, rcpt, datetime(2026, 11, 6, 15))
+    assert sent == [("alert", "me@x.com", [a1.key], [], [])]
+    # past midnight on later days: no digest, just an alert when something new opens
+    sent.clear()
+    assert d.process([a1], EVERYONE, rcpt, datetime(2026, 11, 7, 0, 5)) == {}
+    d.process([a1, a2], EVERYONE, rcpt, datetime(2026, 11, 8, 0, 5))
+    assert sent == [("alert", "me@x.com", [a2.key], [], [])]
+    assert d.next_send() is None
+    # `jap r digest` still works on demand
+    sent.clear()
+    d.process([a1, a2], EVERYONE, rcpt, datetime(2026, 11, 8, 9), force=True)
+    assert sent[0][0] == "digest"
