@@ -190,13 +190,61 @@ def test_pocketconcierge():
     slots = PocketConciergeProvider(delay=0).fetch(R("pocketconcierge", "244273"))
     assert asked == ["2026-11-20", "2026-11-22"]  # only open dates inside the window; waitlist skipped
     assert [(s.date.day, s.time) for s in slots] == [(20, time(18))]
-    assert slots[0].detail == "dinner · Omakase Course · ¥29,700 · counter; dinner · Special · ¥29,700 · counter"
+    assert slots[0].detail == "dinner · counter · 2 courses from ¥29,700"
     assert slots[0].url.endswith("/en/restaurants/244273?date=2026-11-20&partySize=2")
 
     asked.clear()
     w = PocketConciergeProvider(delay=0).fetch(R("pocketconcierge", "244273", options={"include_waitlist": True}))
     assert asked == ["2026-11-20", "2026-11-21", "2026-11-22"]
     assert [(s.date.day, s.detail.split(" · ")[0]) for s in w] == [(20, "dinner"), (21, "waitlist")]
+
+
+def test_pocketconcierge_summary_and_seating_filter():
+    from jap.restaurants.providers import ProviderError
+    from jap.restaurants.providers.pocketconcierge import seating_filter, summarize
+
+    def a(seat, name="Omakase", price=29700, svc="DINNER"):
+        return ({"seatingType": seat, "course": {"name": f" {name} ", "costPerGuest": price, "serviceType": svc}}, False)
+
+    assert summarize([a("COUNTER")]) == "dinner · Omakase · ¥29,700 · counter"
+    assert summarize([a("NONE")]) == "dinner · Omakase · ¥29,700"
+    many = [a("COUNTER", "A", 36300), a("PRIVATE_ROOM", "A", 36300), a("COUNTER", "B", 22000), a("NONE", "C", 41800)]
+    assert summarize(many) == "dinner · counter, private room · 3 courses from ¥22,000"
+    assert summarize([(a("COUNTER")[0], True)]) == "waitlist · dinner · Omakase · ¥29,700 · counter"
+
+    assert seating_filter(None) == set()
+    assert seating_filter("Counter") == {"COUNTER"}
+    assert seating_filter(["private room", "private-counter", "unspecified"]) == {"PRIVATE_ROOM", "PRIVATE_COUNTER", "NONE"}
+    with pytest.raises(ProviderError, match="unknown Pocket Concierge seating 'booth'"):
+        seating_filter(["booth"])
+
+
+@respx.mock
+def test_pocketconcierge_seating_option():
+    seats = [
+        {"__typename": "ReservableAvailability", "startTime": "2026-11-20T18:00:00+09:00", "seatingType": st,
+         "minPartySize": 1, "maxPartySize": 4, "course": {"name": "X", "costPerGuest": 1000, "serviceType": "DINNER"}}
+        for st in ("COUNTER", "PRIVATE_ROOM")
+    ] + [
+        {"__typename": "ReservableAvailability", "startTime": "2026-11-20T19:00:00+09:00", "seatingType": "PRIVATE_ROOM",
+         "minPartySize": 1, "maxPartySize": 4, "course": {"name": "X", "costPerGuest": 1000, "serviceType": "DINNER"}}
+    ]
+
+    def gql(request):
+        if b"availabilityCalendar" in request.content:
+            cal = {"reservationDates": ["2026-11-20"], "waitlistDates": []}
+            return httpx.Response(200, json={"data": {"venue": {"availabilityCalendar": cal}}})
+        return httpx.Response(200, json={"data": {"availabilitySearch": seats}})
+
+    respx.post("https://www.pocket-concierge.jp/graphql").mock(side_effect=gql)
+    p = PocketConciergeProvider(delay=0)
+    all_ = p.fetch(R("pocketconcierge", "1"))
+    assert [(s.time, s.detail) for s in all_] == [
+        (time(18), "dinner · X · ¥1,000 · counter, private room"),
+        (time(19), "dinner · X · ¥1,000 · private room"),
+    ]
+    counter = p.fetch(R("pocketconcierge", "1", options={"seating": "counter"}))
+    assert [(s.time, s.detail) for s in counter] == [(time(18), "dinner · X · ¥1,000 · counter")]
 
 
 @respx.mock

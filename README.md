@@ -82,8 +82,13 @@ if it fits any of them. Restaurants without windows use `[[defaults.windows]]`.
 Per-platform options:
 - **TableCheck** `menu_item_id = "..."`: pin a course for shops that require one. This cuts requests a lot. Find IDs with `uv run jap r menus <slug-or-url> --date YYYY-MM-DD`.
 - **Tabelog** `seat_only = true`, `plan_id = "..."`.
-- **Pocket Concierge** `include_waitlist = true`: also report waitlist-only seatings (marked "waitlist"). Only seatings
-  whose allowed party size fits `party_size` are reported. Members-only "secret seats" aren't checked.
+- **Pocket Concierge**
+  - `seating = ["counter"]`: only these seating types. Choose from `counter`, `private counter`, `private room`,
+    `table`, `takeout`, `unspecified` (the restaurant didn't say). Leave it out for all.
+  - `include_waitlist = true`: also report waitlist-only seatings (marked "waitlist").
+  - Only seatings whose allowed party size fits `party_size` are reported. Members-only "secret seats" aren't checked.
+  - Info shows one line per time: one course looks like `dinner · Omakase · ¥29,700 · counter`, several like
+    `dinner · counter, private room · 4 courses from ¥22,000`.
 
 ### Email: new-slot alerts + daily digest
 
