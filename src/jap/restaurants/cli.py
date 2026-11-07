@@ -179,7 +179,7 @@ def run(args) -> int:
         current = [s for res in results for s in res.slots]
         new, _ = seen.split(current)
         scan = checker.last_scan
-        print_results(results, {s.key for s in new}, show_all=not args.new_only, scan=scan)
+        print_results(results, {s.key for s in new}, show_all=not getattr(args, "new_only", False), scan=scan)
         seen.update(results)
         if digest:
             report = digest.process(
