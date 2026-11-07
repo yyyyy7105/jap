@@ -137,7 +137,7 @@ def test_dotenv(tmp_path, monkeypatch):
     assert os.environ["JAP_T1"] == "abc" and os.environ["JAP_T2"] == "real"
 
 
-# -- daily digest --------------------------------------------------------
+# -- alerts + daily digest -----------------------------------------------
 BINDING = {"A": ["me@x.com"], "B": ["me@x.com", "pal@y.com"]}
 EVERYONE = ["me@x.com", "pal@y.com"]
 
@@ -149,82 +149,110 @@ def rcpt(s):
 def recorder():
     sent = []
 
-    def sender(addr, new, old, scan, names, failed, day):
-        sent.append((addr, [s.key for s in new], [s.key for s in old], failed))
+    def sender(kind, addr, new, old, scan, names, failed, day):
+        sent.append((kind, addr, [s.key for s in new], [s.key for s in old], failed))
 
     return sent, sender
 
 
-def test_digest_once_a_day_at_midnight_new_first(tmp_path):
+def test_alert_message():
+    msg = notify.build_alert(cfg(), [_slot(18, "A")], ["me@x.com"], _scan(), ["A"])
+    assert msg["Subject"] == "[jap] NEW: A Fri 11-20 18:00"
+    assert "18:00" in msg.get_body(("plain",)).get_content() and "A: next 14d" in msg.get_body(("plain",)).get_content()
+    two = notify.build_alert(cfg(), [_slot(18, "A"), _slot(19, "C <x>")], ["me@x.com"])
+    assert two["Subject"] == "[jap] 2 new slots: A, C <x>"
+    assert "C &lt;x&gt;" in two.get_body(("html",)).get_content()
+
+
+def test_new_slots_alerted_right_away_digest_at_midnight(tmp_path):
     sent, sender = recorder()
     d = DailyDigest(cfg(), tmp_path / "d.json", sender=sender)
     a1, a2, b1 = _slot(18, "A"), _slot(19, "A"), _slot(20, "B")
 
-    # first run ever (afternoon): nothing sent, schedule starts - first digest at next midnight
-    assert d.process([a1], EVERYONE, rcpt, datetime(2026, 11, 6, 15)) == {}
-    # more rounds the same day: still nothing, however many slots open up
-    assert d.process([a1, b1], EVERYONE, rcpt, datetime(2026, 11, 6, 23, 50)) == {}
+    # first run ever (afternoon, empty state): everything open is new -> alert now
+    r = d.process([a1], EVERYONE, rcpt, datetime(2026, 11, 6, 15))
+    assert r["me@x.com"][0] == "alert sent" and "pal@y.com" not in r
+    assert sent == [("alert", "me@x.com", [a1.key], [], [])]
+
+    # same slots next round: no repeat
+    sent.clear()
+    assert d.process([a1], EVERYONE, rcpt, datetime(2026, 11, 6, 15, 10)) == {}
+
+    # a new slot appears: alert only the people bound to it, only the new slot
+    d.process([a1, b1], EVERYONE, rcpt, datetime(2026, 11, 6, 23, 50))
+    assert sorted(sent) == [("alert", "me@x.com", [b1.key], [], []), ("alert", "pal@y.com", [b1.key], [], [])]
     assert d.next_send(datetime(2026, 11, 6, 23, 50)) == datetime(2026, 11, 7, 0, 0)
 
-    # just after midnight: everyone gets ALL their open slots; all new the first time
-    r = d.process([a1, b1], EVERYONE, rcpt, datetime(2026, 11, 7, 0, 0, 30))
-    assert r["me@x.com"][0] == "sent" and r["pal@y.com"][0] == "sent"
-    assert sorted(sent) == [("me@x.com", [a1.key, b1.key], [], []), ("pal@y.com", [b1.key], [], [])]
-
-    # rest of that day: no more emails
+    # midnight: digest with ALL open slots; first digest -> all NEW (alerted today still counts as new)
     sent.clear()
-    assert d.process([a1, a2, b1], EVERYONE, rcpt, datetime(2026, 11, 7, 12)) == {}
+    r = d.process([a1, b1], EVERYONE, rcpt, datetime(2026, 11, 7, 0, 0, 30))
+    assert r["me@x.com"][0] == "digest sent"
+    assert sorted(sent) == [("digest", "me@x.com", [a1.key, b1.key], [], []), ("digest", "pal@y.com", [b1.key], [], [])]
 
-    # next midnight, after a restart: a2 is NEW, a1/b1 still open; pal only hears about B
+    # during the day: a2 found -> alert; no second digest
+    sent.clear()
+    d.process([a1, a2, b1], EVERYONE, rcpt, datetime(2026, 11, 7, 12))
+    assert sent == [("alert", "me@x.com", [a2.key], [], [])]
+
+    # next midnight, after a restart: a2 NEW at the top, a1/b1 still open; pal only hears about B
+    sent.clear()
     d2 = DailyDigest(cfg(), tmp_path / "d.json", sender=sender)
     d2.process([a1, a2, b1], EVERYONE, rcpt, datetime(2026, 11, 8, 0, 1))
-    assert sorted(sent) == [("me@x.com", [a2.key], [a1.key, b1.key], []), ("pal@y.com", [], [b1.key], [])]
+    assert sorted(sent) == [
+        ("digest", "me@x.com", [a2.key], [a1.key, b1.key], []),
+        ("digest", "pal@y.com", [], [b1.key], []),
+    ]
 
 
-def test_digest_closed_slot_reopening_is_new_again(tmp_path):
+def test_closed_slot_reopening_is_alerted_again(tmp_path):
     sent, sender = recorder()
     d = DailyDigest(cfg(), tmp_path / "d.json", sender=sender)
     a = _slot(18, "A")
-    d.process([a], ["me@x.com"], rcpt, datetime(2026, 11, 6, 9), force=True)
+    d.process([a], ["me@x.com"], rcpt, datetime(2026, 11, 6, 9))
     d.process([], ["me@x.com"], rcpt, datetime(2026, 11, 6, 12))  # booked by someone
-    d.process([a], ["me@x.com"], rcpt, datetime(2026, 11, 7, 0, 5))  # reopened
-    assert [new for _, new, _, _ in sent] == [[a.key], [a.key]]
+    d.process([a], ["me@x.com"], rcpt, datetime(2026, 11, 6, 13))  # reopened
+    assert [(k, new) for k, _, new, _, _ in sent] == [("alert", [a.key]), ("alert", [a.key])]
 
 
-def test_digest_failed_check_keeps_record(tmp_path):
+def test_failed_check_keeps_record(tmp_path):
     sent, sender = recorder()
     d = DailyDigest(cfg(), tmp_path / "d.json", sender=sender)
     a, b = _slot(18, "A"), _slot(20, "B")
     d.process([a, b], ["me@x.com"], rcpt, datetime(2026, 11, 6, 9), force=True)
-    # A's check fails at midnight: A's slot isn't re-labelled NEW later, and the email says A failed
+    # A's check fails at midnight: digest names it, and A's slot isn't re-alerted / NEW once it's back
     d.process([b], ["me@x.com"], rcpt, datetime(2026, 11, 7, 0, 5), failed={("tablecheck", "A")})
-    assert sent[-1] == ("me@x.com", [], [b.key], ["A"])
+    assert sent[-1] == ("digest", "me@x.com", [], [b.key], ["A"])
+    n = len(sent)
+    d.process([a, b], ["me@x.com"], rcpt, datetime(2026, 11, 7, 9))
+    assert len(sent) == n  # no alert for a
     d.process([a, b], ["me@x.com"], rcpt, datetime(2026, 11, 8, 0, 5))
-    assert sent[-1] == ("me@x.com", [], [a.key, b.key], [])
+    assert sent[-1] == ("digest", "me@x.com", [], [a.key, b.key], [])
 
 
-def test_digest_empty_day_and_send_failure(tmp_path):
+def test_empty_digest_and_send_failures(tmp_path):
     sent, sender = recorder()
     d = DailyDigest(cfg(), tmp_path / "d.json", sender=sender)
-    assert d.process([], ["me@x.com"], rcpt, datetime(2026, 11, 7, 0, 1), force=True)["me@x.com"][0] == "sent"
-    assert sent == [("me@x.com", [], [], [])]  # "nothing open" email by default
+    assert d.process([], ["me@x.com"], rcpt, datetime(2026, 11, 7, 0, 1), force=True)["me@x.com"][0] == "digest sent"
+    assert sent == [("digest", "me@x.com", [], [], [])]  # "nothing open" email by default
 
     quiet = DailyDigest(cfg(send_empty=False), tmp_path / "q.json", sender=sender)
-    assert quiet.process([], ["me@x.com"], rcpt, datetime(2026, 11, 7, 0, 1), force=True)["me@x.com"][0].startswith("skipped")
+    r = quiet.process([], ["me@x.com"], rcpt, datetime(2026, 11, 7, 0, 1), force=True)
+    assert r["me@x.com"][0] == "digest skipped (nothing open)"
 
     def boom(*a):
         raise NotifyError("smtp down")
 
     f = DailyDigest(cfg(), tmp_path / "f.json", sender=boom)
-    f.process([], ["me@x.com"], rcpt, datetime(2026, 11, 6, 9))  # start schedule
+    r = f.process([_slot(18)], ["me@x.com"], rcpt, datetime(2026, 11, 6, 9))
+    assert r["me@x.com"][0].startswith("alert failed")
+    assert f._r("me@x.com")["alerted"] == []  # retried next round
     r = f.process([_slot(18)], ["me@x.com"], rcpt, datetime(2026, 11, 7, 0, 1))
-    assert r["me@x.com"][0].startswith("failed")
-    assert f.due("me@x.com", datetime(2026, 11, 7, 0, 11))  # retried next round
-    assert f._r("me@x.com")["emailed"] == []  # nothing marked as emailed
+    assert r["me@x.com"][0].startswith("digest failed")
+    assert f.due("me@x.com", datetime(2026, 11, 7, 0, 11))  # digest retried next round
 
 
-def test_digest_reads_old_state_file(tmp_path):
+def test_reads_old_state_file(tmp_path):
     p = tmp_path / "old.json"
-    p.write_text('{"recipients": {"me@x.com": {"sent": ["x"], "notified": ["k1"], "pending": []}}}', encoding="utf-8")
+    p.write_text('{"recipients": {"me@x.com": {"last_sent": "2026-11-06", "emailed": ["k1"]}}}', encoding="utf-8")
     d = DailyDigest(cfg(), p)
-    assert d._r("me@x.com") == {"last_sent": None, "emailed": ["k1"]}
+    assert d._r("me@x.com") == {"last_sent": "2026-11-06", "alerted": ["k1"], "digested": ["k1"]}

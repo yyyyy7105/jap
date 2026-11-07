@@ -82,17 +82,18 @@ Per-platform options:
 - **TableCheck** `menu_item_id = "..."`: pin a course for shops that require one. This cuts requests a lot. Find IDs with `uv run jap r menus <slug-or-url> --date YYYY-MM-DD`.
 - **Tabelog** `seat_only = true`, `plan_id = "..."`.
 
-### Email: daily digest
+### Email: new-slot alerts + daily digest
 
-Once a day at `send_at` (default `00:00`, this computer's clock) every recipient gets **one** email listing
-**all** open slots for the restaurants bound to them:
+Each recipient gets two kinds of email, only about the restaurants bound to them:
 
-- **NEW**: slots that weren't in any earlier digest. Listed first and highlighted.
-- **Still open**: slots already reported that are still bookable.
-- When the scan ran and which date/time ranges were scanned. Restaurants whose check failed are named too.
+1. **Alert, right away**: whenever a check finds a slot they haven't been emailed about, they get an email
+   with just the new slot(s). The same slot is never alerted twice while it stays open.
+2. **Daily digest** at `send_at` (default `00:00`, this computer's clock), listing **all** open slots:
+   - **NEW**: slots that weren't in the previous digest (including ones already alerted that day). Listed first and highlighted.
+   - **Still open**: slots from the previous digest that are still bookable.
+   - When the scan ran and which date/time ranges were scanned. Restaurants whose check failed are named too.
 
-Nothing is emailed during the day; the console shows finds live. A slot that gets booked is forgotten,
-so if it reopens it's NEW again.
+A slot that gets booked is forgotten, so if it reopens it's alerted again.
 
 The account lives in `settings.toml` under `[email]`. Who hears about which restaurant is set per
 restaurant with `notify` in `watchlist.toml`:
@@ -111,7 +112,7 @@ family = ["you@gmail.com", "partner@example.com"]
 ```
 
 ```bash
-uv run jap r watch --email              # watch; digest goes out at send_at every day
+uv run jap r watch --email              # watch; alerts as slots appear, digest at send_at every day
 uv run jap r digest                     # check now and send everyone their digest immediately
 uv run jap r test-email                 # test message to everyone any restaurant notifies
 uv run jap r test-email --to family     # ...or just a group / address
@@ -119,15 +120,16 @@ uv run jap r test-email --to family     # ...or just a group / address
 
 - `watch` wakes up for `send_at`, runs a fresh check, then sends. The countdown shows the next digest time.
   If the computer was asleep at `send_at`, the digest goes out on the first check after it wakes.
-- The first time `watch --email` sees a person, the schedule starts. Their first digest is at the next `send_at`.
-  Use `jap r digest` if you want one straight away.
+- First run (or after clearing `.state/`): everything currently open is new, so each person gets one alert
+  with all of it straight away. Their first digest is at the next `send_at`; `jap r digest` sends one now.
 - `notify` resolution: the restaurant's own list, else `[defaults] notify`, else `default_to`. Unknown group names are a config error.
 - Each recipient gets their own email, listing only their restaurants. Recipients never see each other's addresses.
-- `enabled = true` makes `watch` send digests without `--email`; `--no-email` turns it off for one run.
+- `enabled = true` makes `watch` email without `--email`; `--no-email` turns it off for one run. `check` never emails.
 - Password: `password = "..."` in `settings.toml`, or the env var named by `password_env` (default
   `JAP_SMTP_PASSWORD`, e.g. in a git-ignored `.env`). The env var wins if both are set. Gmail needs an App Password.
-- If sending fails, that person's digest is retried on the next check. Nothing is marked as reported until it's sent.
-- Record of what's been reported: `.state/email_digest.json` (per person: `last_sent` date and the `emailed` slots).
+- If sending fails, that alert/digest is retried on the next check. Nothing is marked as reported until it's sent.
+- Record: `.state/email_digest.json`, per person `last_sent` (digest date), `alerted` (slots emailed about)
+  and `digested` (slots in the last digest). Only still-open slots are kept.
 
 ### OMAKASE
 

@@ -1,4 +1,4 @@
-"""Daily email digest of open slots (stdlib smtplib, any SMTP server)."""
+"""Email: instant alerts for new slots + a daily digest of all open slots (stdlib smtplib)."""
 
 from __future__ import annotations
 
@@ -200,6 +200,59 @@ def build_message(
     return msg
 
 
+def build_alert(
+    cfg: EmailConfig,
+    new: list[Slot],
+    to: list[str],
+    scan: ScanInfo | None = None,
+    restaurants: list[str] | None = None,
+) -> EmailMessage:
+    """Sent right after a check finds slots this recipient hasn't been emailed about."""
+    new = sorted(new)
+    plural = "s" if len(new) > 1 else ""
+    msg = EmailMessage()
+    if len(new) == 1:
+        s = new[0]
+        msg["Subject"] = f"{cfg.subject_prefix} NEW: {s.restaurant} {s.date:%a %m-%d} {s.time:%H:%M}"
+    else:
+        names = sorted({s.restaurant for s in new})
+        msg["Subject"] = f"{cfg.subject_prefix} {len(new)} new slots: {', '.join(names)}"
+    msg["From"] = cfg.sender
+    msg["To"] = ", ".join(to)
+    scanned = _scanned(scan, restaurants or sorted({s.restaurant for s in new}))
+
+    lines = [f"New open slot{plural} just found (Tokyo time):", ""]
+    for s in new:
+        lines.append(f"  * {_slot_line(s)}")
+        if s.url:
+            lines.append(f"      {s.url}")
+    lines.append("")
+    if scan:
+        lines += [f"Scan ran {scan.when}", "Scanned ranges (Tokyo time):"]
+        lines += [f"  {n}: {r}" for n, r in scanned]
+        lines.append("")
+    lines.append("Slots can go quickly - book directly on the site. Full list in the daily digest.")
+    msg.set_content("\n".join(lines))
+
+    def row(s: Slot) -> str:
+        link = f'<a href="{html.escape(s.url)}">Book</a>' if s.url else ""
+        return (
+            f"<tr><td>{s.date:%a %Y-%m-%d}</td><td><b>{s.time:%H:%M}</b></td>"
+            f"<td>{html.escape(s.restaurant)}</td><td>{s.party_size}</td>"
+            f"<td>{html.escape(s.detail)}</td><td>{link}</td></tr>"
+        )
+
+    msg.add_alternative(
+        f"<p><b>New open slot{plural} just found</b> (Tokyo time):</p>"
+        '<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-family:sans-serif">'
+        "<tr><th>Date</th><th>Time</th><th>Restaurant</th><th>Pax</th><th>Info</th><th></th></tr>"
+        f"{''.join(row(s) for s in new)}</table>{_scanned_html(scan, scanned)}"
+        "<p>Slots can go quickly - book directly on the site. Full list in the daily digest.</p>",
+        subtype="html",
+    )
+    return msg
+
+
 def _scanned(scan: ScanInfo | None, names: list[str]) -> list[tuple[str, str]]:
     if not scan:
         return []
@@ -241,26 +294,25 @@ def send(cfg: EmailConfig, msg: EmailMessage, timeout: float = 30) -> None:
 
 
 class DailyDigest:
-    """One email per recipient per day, at `send_at` (local time).
+    """Two kinds of email per recipient:
 
-    Each digest lists every currently open slot for that recipient's restaurants.
-    Slots that weren't in any earlier digest are NEW and listed first. Per recipient
-    we remember:
-      last_sent - date of their last digest (so it goes out once a day)
-      emailed   - slots already included in a digest that are still open
-    A slot that closes is forgotten (for restaurants checked successfully), so if
-    it reopens it's NEW again.
+    alert  - right after a check finds slots they haven't been emailed about yet.
+    digest - once a day at `send_at` (local time): every open slot, NEW ones first.
+             NEW = not in their previous digest (so slots alerted today are NEW too).
+
+    Per recipient we remember (only slots that are still open):
+      last_sent - date of their last digest
+      alerted   - slots they've been emailed about (alert or digest) -> no repeat alerts
+      digested  - slots in their last digest -> decides NEW in the next digest
+    A slot that closes is forgotten (for restaurants checked successfully), so if it
+    reopens it's alerted again.
     """
 
     def __init__(self, cfg: EmailConfig, state_path: Path, sender=None):
         self.cfg = cfg
         self.path = Path(state_path)
-        # sender(addr, new, still_open, scan, names, failed, day)
-        self._send = sender or (
-            lambda addr, new, old, scan, names, failed, day: send(
-                cfg, build_message(cfg, new, old, [addr], scan, names, failed, day)
-            )
-        )
+        # sender(kind, addr, new, still_open, scan, names, failed, day); kind is "alert" or "digest"
+        self._send = sender or self._default_send
         self.state: dict[str, dict] = {}
         if self.path.exists():
             try:
@@ -268,13 +320,21 @@ class DailyDigest:
             except (ValueError, AttributeError):
                 self.state = {}
         for st in self.state.values():  # tolerate older state files
+            old = st.pop("emailed", None) or st.pop("notified", None) or []
             st.setdefault("last_sent", None)
-            st.setdefault("emailed", st.pop("notified", []))
-            st.pop("sent", None)
-            st.pop("pending", None)
+            st.setdefault("alerted", list(old))
+            st.setdefault("digested", list(old))
+            for k in ("sent", "pending", "notified"):
+                st.pop(k, None)
+
+    def _default_send(self, kind, addr, new, old, scan, names, failed, day):
+        if kind == "alert":
+            send(self.cfg, build_alert(self.cfg, new, [addr], scan, names))
+        else:
+            send(self.cfg, build_message(self.cfg, new, old, [addr], scan, names, failed, day))
 
     def _r(self, addr: str) -> dict:
-        return self.state.setdefault(addr.lower(), {"last_sent": None, "emailed": []})
+        return self.state.setdefault(addr.lower(), {"last_sent": None, "alerted": [], "digested": []})
 
     def next_send(self, now: datetime | None = None) -> datetime:
         """The next send_at moment after `now` (for the countdown)."""
@@ -285,7 +345,7 @@ class DailyDigest:
     def due(self, addr: str, now: datetime) -> bool:
         st = self._r(addr)
         if st["last_sent"] is None:
-            # first time we see this person: start counting from today, first digest at the next send_at
+            # first time we see this person: alerts cover today, first digest at the next send_at
             st["last_sent"] = now.date().isoformat()
             return False
         return st["last_sent"] < now.date().isoformat() and now.time() >= self.cfg.send_at
@@ -302,45 +362,67 @@ class DailyDigest:
         force: bool = False,
     ) -> dict:
         """Call after every round.
-        current: open slots found this round; recipients: everyone who gets digests;
+        current: open slots found this round; recipients: everyone who gets email;
         recipients_of(slot) -> addresses; restaurants_of(addr) -> names they watch;
         failed: (platform, name) whose check failed this round (their memory is kept);
-        force: send now regardless of the schedule.
-        Returns {addr: (status, new, still_open)}; status 'sent', 'skipped (nothing open)' or 'failed: <err>'."""
+        force: send the digest now regardless of the schedule.
+        Returns {addr: (status, new, still_open)}; status is 'digest sent', 'alert sent',
+        'digest skipped (nothing open)' or '<kind> failed: <err>'."""
         now = now or datetime.now()
+        today = now.date().isoformat()
         open_by_key = {s.key: s for s in sorted(current)}
         frozen = tuple(f"{p}:{n}:" for p, n in (failed or ()))
         failed_names = sorted({n for _, n in (failed or ())})
 
+        def is_frozen(k):
+            return bool(frozen) and k.startswith(frozen)
+
         # forget slots that closed - but only for restaurants we actually checked
         for st in self.state.values():
-            st["emailed"] = [k for k in st["emailed"] if k in open_by_key or (frozen and k.startswith(frozen))]
+            st["alerted"] = [k for k in st["alerted"] if k in open_by_key or is_frozen(k)]
+            st["digested"] = [k for k in st["digested"] if k in open_by_key or is_frozen(k)]
 
         report = {}
         for addr in {a.lower(): a for a in recipients}.values():
             st = self._r(addr)
-            if not force and not self.due(addr, now):
-                continue
-            mine = [s for k, s in open_by_key.items() if addr.lower() in {a.lower() for a in recipients_of(s)}]
-            done = set(st["emailed"])
-            new = [s for s in mine if s.key not in done]
-            old = [s for s in mine if s.key in done]
-            if not mine and not self.cfg.send_empty:
-                st["last_sent"] = now.date().isoformat()
-                report[addr] = ("skipped (nothing open)", [], [])
-                continue
+            mine = [s for s in open_by_key.values() if addr.lower() in {a.lower() for a in recipients_of(s)}]
             names = restaurants_of(addr) if restaurants_of else None
-            mine_failed = [n for n in failed_names if names is None or n in names]
-            try:
-                self._send(addr, new, old, scan, names, mine_failed, now.date())
-            except NotifyError as e:  # not marked as sent; retried next round
-                report[addr] = (f"failed: {e}", new, old)
-                continue
-            st["last_sent"] = now.date().isoformat()
-            st["emailed"] = sorted(done | {s.key for s in mine})
-            report[addr] = ("sent", new, old)
 
-        self.state = {a: st for a, st in self.state.items() if st["last_sent"] or st["emailed"]}
+            if force or self.due(addr, now):
+                digested = set(st["digested"])
+                new = [s for s in mine if s.key not in digested]
+                old = [s for s in mine if s.key in digested]
+                keys = {s.key for s in mine}
+                kept = {k for k in st["digested"] if is_frozen(k)}
+                if not mine and not self.cfg.send_empty:
+                    st["last_sent"], st["digested"] = today, sorted(kept)
+                    report[addr] = ("digest skipped (nothing open)", [], [])
+                    continue
+                mine_failed = [n for n in failed_names if names is None or n in names]
+                try:
+                    self._send("digest", addr, new, old, scan, names, mine_failed, now.date())
+                except NotifyError as e:  # not marked as sent; retried next round
+                    report[addr] = (f"digest failed: {e}", new, old)
+                    continue
+                st["last_sent"] = today
+                st["digested"] = sorted(keys | kept)
+                st["alerted"] = sorted(set(st["alerted"]) | keys)
+                report[addr] = ("digest sent", new, old)
+                continue
+
+            alerted = set(st["alerted"])
+            fresh = [s for s in mine if s.key not in alerted]
+            if not fresh:
+                continue
+            try:
+                self._send("alert", addr, fresh, [], scan, names, [], now.date())
+            except NotifyError as e:  # retried next round
+                report[addr] = (f"alert failed: {e}", fresh, [])
+                continue
+            st["alerted"] = sorted(alerted | {s.key for s in fresh})
+            report[addr] = ("alert sent", fresh, [])
+
+        self.state = {a: st for a, st in self.state.items() if st["last_sent"] or st["alerted"] or st["digested"]}
         self._save()
         return report
 

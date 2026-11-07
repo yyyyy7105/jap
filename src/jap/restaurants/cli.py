@@ -12,7 +12,9 @@ from .config import ConfigError, load_settings, load_watchlist
 from .notify import DailyDigest, EmailConfig, NotifyError, build_message, load_dotenv, send
 from .report import _windows, console, print_results
 
-EMAIL_HELP = "send the daily digest email at [email] send_at (default: [email] enabled in settings.toml)"
+EMAIL_HELP = (
+    "email new slots right away + a daily digest at [email] send_at (default: [email] enabled in settings.toml)"
+)
 
 
 def register(sub: argparse._SubParsersAction) -> None:
@@ -192,12 +194,14 @@ def run(args) -> int:
                 force=force_digest,
             )
             for addr, (status, n_new, n_old) in sorted(report.items()):
-                if status == "sent":
+                if status == "digest sent":
                     console.print(f"[green]Digest sent to {addr}: {len(n_new)} new, {len(n_new) + len(n_old)} open[/]")
-                elif status.startswith("skipped"):
-                    console.print(f"[dim]Digest for {addr} {status}[/]")
+                elif status == "alert sent":
+                    console.print(f"[green]New-slot alert sent to {addr}: {len(n_new)} slot(s)[/]")
+                elif "skipped" in status:
+                    console.print(f"[dim]{addr}: {status}[/]")
                 else:
-                    console.print(f"[red]Digest to {addr} {status}[/] (will retry next round)")
+                    console.print(f"[red]{addr}: {status}[/] (will retry next round)")
         return new
 
     try:
@@ -211,7 +215,10 @@ def run(args) -> int:
         interval = args.interval or int(settings.get("interval_seconds", 600))
         mail = ""
         if use_email:
-            mail = f", daily digest at {email_cfg.send_at:%H:%M} to {len(all_recipients)} recipient(s)"
+            mail = (
+                f", emailing {len(all_recipients)} recipient(s): new slots right away"
+                f" + daily digest at {email_cfg.send_at:%H:%M}"
+            )
         console.print(f"Watching {len(restaurants)} restaurant(s) every ~{interval}s{mail}. Ctrl+C to stop.")
         while True:
             try:
