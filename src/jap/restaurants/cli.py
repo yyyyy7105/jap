@@ -87,7 +87,7 @@ def run(args) -> int:
         slug = id_from_url("tablecheck", args.shop) if "/" in args.shop else args.shop
         d = date.fromisoformat(args.date) if args.date else date.today()
         prov = TableCheckProvider()
-        _, menu = prov._reserve_page(Restaurant(slug, "tablecheck", slug, 2, ()), d)
+        _, menu, _ = prov._reserve_page(Restaurant(slug, "tablecheck", slug, 2, ()), d)
         if not menu:
             console.print("No course menu items found (the shop may not require one).")
         for mid, label in menu:

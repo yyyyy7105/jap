@@ -79,6 +79,7 @@ def test_window_filter():
 # 1795168800 = 2026-11-20 19:00 JST
 @respx.mock
 def test_tablecheck_timetable():
+    respx.get("https://www.tablecheck.com/en/shops/shop/reserve").mock(return_value=httpx.Response(200, text=""))
     respx.get("https://www.tablecheck.com/en/shops/shop/available/timetable").mock(
         return_value=httpx.Response(
             200,
@@ -100,6 +101,69 @@ def test_tablecheck_timetable():
     slots = TableCheckProvider(delay=0).fetch(R())
     assert [(s.date, s.time) for s in slots] == [(date(2026, 11, 20), time(19)), (date(2026, 11, 21), time(19))]
     assert "start_time=19:00" in slots[0].url
+
+
+TYPES_HTML = """<label><input type="radio" name="reservation[service_category]" value="c1">counter</label>
+<label><input type="radio" name="reservation[service_category]" value="p1">Private room</label>"""
+
+
+@respx.mock
+def test_tablecheck_timetable_labels_seating():
+    reserve = respx.get("https://www.tablecheck.com/en/shops/shop/reserve").mock(
+        return_value=httpx.Response(200, text=TYPES_HTML)
+    )
+    open_by_type = {  # 19:00 open for both, 19:30 counter only, 18:00 private only
+        None: ["1795168800", "1795170600", "1795165200"],
+        "c1": ["1795168800", "1795170600"],
+        "p1": ["1795168800", "1795165200"],
+    }
+
+    def timetable(request):
+        eps = open_by_type[request.url.params.get("reservation[service_category]")]
+        return httpx.Response(200, json={"data": {"slots": {"2026-11-20": {e: {"available": True, "meal": "dinner"} for e in eps}}}})
+
+    respx.get("https://www.tablecheck.com/en/shops/shop/available/timetable").mock(side_effect=timetable)
+    slots = TableCheckProvider(delay=0).fetch(R())
+    assert [(s.time, s.detail) for s in slots] == [
+        (time(18), "dinner · Private room"),
+        (time(19), "dinner · counter, Private room"),
+        (time(19, 30), "dinner · counter"),
+    ]
+    assert reserve.call_count == 1
+
+
+@respx.mock
+def test_tablecheck_nothing_open_skips_seating_lookup():
+    reserve = respx.get("https://www.tablecheck.com/en/shops/shop/reserve").mock(
+        return_value=httpx.Response(200, text=TYPES_HTML)
+    )
+    respx.get("https://www.tablecheck.com/en/shops/shop/available/timetable").mock(
+        return_value=httpx.Response(200, json={"data": {"slots": {"2026-11-20": {"1795168800": {"available": False}}}}})
+    )
+    assert TableCheckProvider(delay=0).fetch(R()) == []
+    assert reserve.call_count == 0
+
+
+@respx.mock
+def test_tablecheck_per_time_seating():
+    respx.get("https://www.tablecheck.com/en/shops/shop/available/timetable").mock(
+        return_value=httpx.Response(200, json={"status": "disabled"})
+    )
+    html = TYPES_HTML + """<select name="reservation[start_at_epoch]">
+      <option value="1795168800">7:00 PM</option><option value="1795170600">7:30 PM</option></select>"""
+    respx.get("https://www.tablecheck.com/en/shops/shop/reserve").mock(return_value=httpx.Response(200, text=html))
+
+    def avail(request):  # shop answers only per seating type; 19:00 is counter only, 19:30 full
+        cat = request.url.params.get("reservation[service_category]")
+        ep = request.url.params.get("reservation[start_at_epoch]")
+        if not cat:
+            return httpx.Response(200, json={"status": "warn", "data": "require_service_category"})
+        ok = cat == "c1" and ep == "1795168800"
+        return httpx.Response(200, json={"status": "success" if ok else "warn", "data": ["x"] if ok else "full"})
+
+    respx.get("https://www.tablecheck.com/en/shops/shop/available").mock(side_effect=avail)
+    slots = TableCheckProvider(delay=0).fetch(R(windows=[W(end_date=date(2026, 11, 20))]))
+    assert [(s.time, s.detail) for s in slots] == [(time(19), "counter")]
 
 
 @respx.mock
@@ -338,6 +402,7 @@ def test_rolling_days_errors(tmp_path, body, msg):
 
 @respx.mock
 def test_tablecheck_overlapping_timetable_no_duplicates():
+    respx.get("https://www.tablecheck.com/en/shops/shop/reserve").mock(return_value=httpx.Response(200, text=""))
     """Regression: overlapping timetable responses must not duplicate slots."""
     payload = {"data": {"slots": {
         "2026-11-20": {"1795168800": {"available": True, "meal": "dinner"}},

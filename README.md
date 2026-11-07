@@ -81,6 +81,7 @@ if it fits any of them. Restaurants without windows use `[[defaults.windows]]`.
 
 Per-platform options:
 - **TableCheck** `menu_item_id = "..."`: pin a course for shops that require one. This cuts requests a lot. Find IDs with `uv run jap r menus <slug-or-url> --date YYYY-MM-DD`.
+  For shops that split seating (e.g. counter / Private room), Info shows which seating each open slot is for, in the email and the log. Nothing is filtered by it; the extra checks only run when something is open.
 - **Tabelog** `seat_only = true`, `plan_id = "..."`.
 - **Pocket Concierge**
   - `seating = ["counter"]`: only these seating types. Choose from `counter`, `private counter`, `private room`,
