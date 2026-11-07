@@ -12,7 +12,7 @@ headless = true          # OMAKASE browser runs hidden
 # Gmail: use an App Password (Google Account > Security > 2-Step Verification > App passwords).
 [email]
 enabled = false
-send_at = "00:00"          # daily digest time (HH:MM, this computer's clock) or "off" = only email new slots
+send_at = "off"            # daily digest time (HH:MM, this computer's clock) or "off" = only email new slots
                            # (new slots are also emailed right away when a check finds them)
 send_empty = true          # also email on days with nothing open (false = skip those days)
 from = "you@gmail.com"

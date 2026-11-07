@@ -53,7 +53,6 @@ notify = []                        # empty list = settings.toml default_to
 name = "Kikuzushi"
 url  = "https://www.pocket-concierge.jp/en/restaurants/244273"
 party_size = 1
-# seating = ["counter"]            # optional: counter / private counter / private room / table / takeout / unspecified
 # include_waitlist = true          # optional: also report waitlist-only seatings
 
 # --- OMAKASE: needs `jap restaurants omakase-login` first (parser pending) --

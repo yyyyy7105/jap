@@ -81,23 +81,23 @@ if it fits any of them. Restaurants without windows use `[[defaults.windows]]`.
 
 Per-platform options:
 - **TableCheck** `menu_item_id = "..."`: pin a course for shops that require one. This cuts requests a lot. Find IDs with `uv run jap r menus <slug-or-url> --date YYYY-MM-DD`.
-  For shops that split seating (e.g. counter / Private room), Info shows which seating each open slot is for, in the email and the log. Nothing is filtered by it; the extra checks only run when something is open.
+  - Every seating type is reported. For shops that split seating (e.g. counter / Private room), Info says which
+    seating each open time is for, e.g. `dinner · counter`. That takes a few extra requests, only when something is open.
 - **Tabelog** `seat_only = true`, `plan_id = "..."`.
 - **Pocket Concierge**
-  - `seating = ["counter"]`: only these seating types. Choose from `counter`, `private counter`, `private room`,
-    `table`, `takeout`, `unspecified` (the restaurant didn't say). Leave it out for all.
+  - Every seating type is reported; Info names it (see below).
   - `include_waitlist = true`: also report waitlist-only seatings (marked "waitlist").
   - Only seatings whose allowed party size fits `party_size` are reported. Members-only "secret seats" aren't checked.
   - Info shows one line per time: one course looks like `dinner · Omakase · ¥29,700 · counter`, several like
     `dinner · counter, private room · 4 courses from ¥22,000`.
 
-### Email: new-slot alerts + daily digest
+### Email: new-slot alerts (+ optional daily digest)
 
 Each recipient gets two kinds of email, only about the restaurants bound to them:
 
 1. **Alert, right away**: whenever a check finds a slot they haven't been emailed about, they get an email
    with just the new slot(s). The same slot is never alerted twice while it stays open.
-2. **Daily digest** at `send_at` (default `00:00`, this computer's clock), listing **all** open slots:
+2. **Daily digest**, off by default. Set `send_at = "HH:MM"` (this computer's clock) to get one every day, listing **all** open slots:
    - **NEW**: slots that weren't in the previous digest (including ones already alerted that day). Listed first and highlighted.
    - **Still open**: slots from the previous digest that are still bookable.
    - When the scan ran and which date/time ranges were scanned. Restaurants whose check failed are named too.
@@ -110,7 +110,7 @@ restaurant with `notify` in `watchlist.toml`:
 ```toml
 # settings.toml
 [email]
-send_at = "00:00"                       # daily digest time, or "off" for new-slot alerts only
+send_at = "off"                         # default: new-slot alerts only; "00:00" = also a daily digest at midnight
 send_empty = true                       # also email "nothing open" days (false = skip them)
 username = "you@gmail.com"
 password = "your-app-password"
@@ -121,8 +121,8 @@ family = ["you@gmail.com", "partner@example.com"]
 ```
 
 ```bash
-uv run jap r watch --email              # watch; alerts as slots appear, digest at send_at every day
-uv run jap r digest                     # check now and send everyone their digest immediately
+uv run jap r watch --email              # watch; alerts as slots appear (+ digest at send_at, if set)
+uv run jap r digest                     # check now and send everyone the full list of open slots, even if the digest is off
 uv run jap r test-email                 # test message to everyone any restaurant notifies
 uv run jap r test-email --to family     # ...or just a group / address
 ```
@@ -134,10 +134,10 @@ Run it in the background on Windows (keeps going after the terminal closes; stop
 .\stop-watch.ps1      # stops it (and the python process under uv) and removes the PID file
 ```
 
-- `watch` wakes up for `send_at`, runs a fresh check, then sends. The countdown shows the next digest time.
+- With `send_at` set, `watch` wakes up for it, runs a fresh check, then sends. The countdown shows the next digest time.
   If the computer was asleep at `send_at`, the digest goes out on the first check after it wakes.
 - First run (or after clearing `.state/`): everything currently open is new, so each person gets one alert
-  with all of it straight away. Their first digest is at the next `send_at`; `jap r digest` sends one now.
+  with all of it straight away. With `send_at` set, their first digest is at the next `send_at`; `jap r digest` sends one now.
 - `notify` resolution: the restaurant's own list, else `[defaults] notify`, else `default_to`. Unknown group names are a config error.
 - Each recipient gets their own email, listing only their restaurants. Recipients never see each other's addresses.
 - `enabled = true` makes `watch` email without `--email`; `--no-email` turns it off for one run. `check` never emails.

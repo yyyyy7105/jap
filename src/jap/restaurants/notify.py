@@ -45,7 +45,7 @@ class EmailConfig:
     password_inline: str = field(default="", repr=False)  # `password` key in settings.toml (git-ignored)
     sender: str = ""
     enabled: bool = False  # default for `watch` when no --email/--no-email flag
-    send_at: time | None = time(0, 0)  # daily digest time, this computer's local clock; None = no daily digest
+    send_at: time | None = None  # daily digest time, this computer's local clock; None (default) = no daily digest
     send_empty: bool = True  # still email on days with nothing open (shows the watcher is alive)
     subject_prefix: str = "[jap]"
 
@@ -68,7 +68,7 @@ class EmailConfig:
         if security not in ("starttls", "ssl", "none"):
             raise NotifyError("[email] security must be starttls, ssl or none")
         username = raw.get("username", "")
-        raw_at = raw.get("send_at", "00:00")
+        raw_at = raw.get("send_at", "off")
         send_at: time | None = None
         if raw_at is not False and str(raw_at).strip().lower() not in ("off", "none", ""):
             m = re.fullmatch(r"(\d{1,2}):(\d{2})", str(raw_at).strip())
@@ -301,7 +301,7 @@ class DailyDigest:
     """Two kinds of email per recipient:
 
     alert  - right after a check finds slots they haven't been emailed about yet.
-    digest - once a day at `send_at` (local time): every open slot, NEW ones first.
+    digest - once a day at `send_at` (local time), only if send_at is set: every open slot, NEW ones first.
              NEW = not in their previous digest (so slots alerted today are NEW too).
 
     Per recipient we remember (only slots that are still open):

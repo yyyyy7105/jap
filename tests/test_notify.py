@@ -56,7 +56,7 @@ def _slot(h, name="A", day=20):
 def test_config_parsing():
     c = cfg()
     assert c.sender == "me@gmail.com" and c.security == "starttls"
-    assert c.send_at == time(0, 0) and c.send_empty is True
+    assert c.send_at is None and c.send_empty is True  # daily digest off by default
     assert cfg(send_at="07:30", send_empty=False).send_at == time(7, 30)
     assert cfg(smtp_port=465).security == "ssl"
     assert EmailConfig.from_settings(None) is None
@@ -166,7 +166,7 @@ def test_alert_message():
 
 def test_new_slots_alerted_right_away_digest_at_midnight(tmp_path):
     sent, sender = recorder()
-    d = DailyDigest(cfg(), tmp_path / "d.json", sender=sender)
+    d = DailyDigest(cfg(send_at="00:00"), tmp_path / "d.json", sender=sender)
     a1, a2, b1 = _slot(18, "A"), _slot(19, "A"), _slot(20, "B")
 
     # first run ever (afternoon, empty state): everything open is new -> alert now
@@ -196,7 +196,7 @@ def test_new_slots_alerted_right_away_digest_at_midnight(tmp_path):
 
     # next midnight, after a restart: a2 NEW at the top, a1/b1 still open; pal only hears about B
     sent.clear()
-    d2 = DailyDigest(cfg(), tmp_path / "d.json", sender=sender)
+    d2 = DailyDigest(cfg(send_at="00:00"), tmp_path / "d.json", sender=sender)
     d2.process([a1, a2, b1], EVERYONE, rcpt, datetime(2026, 11, 8, 0, 1))
     assert sorted(sent) == [
         ("digest", "me@x.com", [a2.key], [a1.key, b1.key], []),
@@ -206,7 +206,7 @@ def test_new_slots_alerted_right_away_digest_at_midnight(tmp_path):
 
 def test_closed_slot_reopening_is_alerted_again(tmp_path):
     sent, sender = recorder()
-    d = DailyDigest(cfg(), tmp_path / "d.json", sender=sender)
+    d = DailyDigest(cfg(send_at="00:00"), tmp_path / "d.json", sender=sender)
     a = _slot(18, "A")
     d.process([a], ["me@x.com"], rcpt, datetime(2026, 11, 6, 9))
     d.process([], ["me@x.com"], rcpt, datetime(2026, 11, 6, 12))  # booked by someone
@@ -216,7 +216,7 @@ def test_closed_slot_reopening_is_alerted_again(tmp_path):
 
 def test_failed_check_keeps_record(tmp_path):
     sent, sender = recorder()
-    d = DailyDigest(cfg(), tmp_path / "d.json", sender=sender)
+    d = DailyDigest(cfg(send_at="00:00"), tmp_path / "d.json", sender=sender)
     a, b = _slot(18, "A"), _slot(20, "B")
     d.process([a, b], ["me@x.com"], rcpt, datetime(2026, 11, 6, 9), force=True)
     # A's check fails at midnight: digest names it, and A's slot isn't re-alerted / NEW once it's back
@@ -231,18 +231,18 @@ def test_failed_check_keeps_record(tmp_path):
 
 def test_empty_digest_and_send_failures(tmp_path):
     sent, sender = recorder()
-    d = DailyDigest(cfg(), tmp_path / "d.json", sender=sender)
+    d = DailyDigest(cfg(send_at="00:00"), tmp_path / "d.json", sender=sender)
     assert d.process([], ["me@x.com"], rcpt, datetime(2026, 11, 7, 0, 1), force=True)["me@x.com"][0] == "digest sent"
     assert sent == [("digest", "me@x.com", [], [], [])]  # "nothing open" email by default
 
-    quiet = DailyDigest(cfg(send_empty=False), tmp_path / "q.json", sender=sender)
+    quiet = DailyDigest(cfg(send_at="00:00", send_empty=False), tmp_path / "q.json", sender=sender)
     r = quiet.process([], ["me@x.com"], rcpt, datetime(2026, 11, 7, 0, 1), force=True)
     assert r["me@x.com"][0] == "digest skipped (nothing open)"
 
     def boom(*a):
         raise NotifyError("smtp down")
 
-    f = DailyDigest(cfg(), tmp_path / "f.json", sender=boom)
+    f = DailyDigest(cfg(send_at="00:00"), tmp_path / "f.json", sender=boom)
     r = f.process([_slot(18)], ["me@x.com"], rcpt, datetime(2026, 11, 6, 9))
     assert r["me@x.com"][0].startswith("alert failed")
     assert f._r("me@x.com")["alerted"] == []  # retried next round

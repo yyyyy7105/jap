@@ -13,7 +13,7 @@ from .notify import DailyDigest, EmailConfig, NotifyError, build_message, load_d
 from .report import _windows, console, print_results
 
 EMAIL_HELP = (
-    "email new slots right away + a daily digest at [email] send_at (default: [email] enabled in settings.toml)"
+    "email new slots right away (+ a daily digest if [email] send_at is set; default: [email] enabled in settings.toml)"
 )
 
 

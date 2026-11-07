@@ -263,9 +263,8 @@ def test_pocketconcierge():
     assert [(s.date.day, s.detail.split(" · ")[0]) for s in w] == [(20, "dinner"), (21, "waitlist")]
 
 
-def test_pocketconcierge_summary_and_seating_filter():
-    from jap.restaurants.providers import ProviderError
-    from jap.restaurants.providers.pocketconcierge import seating_filter, summarize
+def test_pocketconcierge_summary():
+    from jap.restaurants.providers.pocketconcierge import summarize
 
     def a(seat, name="Omakase", price=29700, svc="DINNER"):
         return ({"seatingType": seat, "course": {"name": f" {name} ", "costPerGuest": price, "serviceType": svc}}, False)
@@ -276,15 +275,9 @@ def test_pocketconcierge_summary_and_seating_filter():
     assert summarize(many) == "dinner · counter, private room · 3 courses from ¥22,000"
     assert summarize([(a("COUNTER")[0], True)]) == "waitlist · dinner · Omakase · ¥29,700 · counter"
 
-    assert seating_filter(None) == set()
-    assert seating_filter("Counter") == {"COUNTER"}
-    assert seating_filter(["private room", "private-counter", "unspecified"]) == {"PRIVATE_ROOM", "PRIVATE_COUNTER", "NONE"}
-    with pytest.raises(ProviderError, match="unknown Pocket Concierge seating 'booth'"):
-        seating_filter(["booth"])
-
 
 @respx.mock
-def test_pocketconcierge_seating_option():
+def test_pocketconcierge_reports_every_seating():
     seats = [
         {"__typename": "ReservableAvailability", "startTime": "2026-11-20T18:00:00+09:00", "seatingType": st,
          "minPartySize": 1, "maxPartySize": 4, "course": {"name": "X", "costPerGuest": 1000, "serviceType": "DINNER"}}
@@ -307,8 +300,6 @@ def test_pocketconcierge_seating_option():
         (time(18), "dinner · X · ¥1,000 · counter, private room"),
         (time(19), "dinner · X · ¥1,000 · private room"),
     ]
-    counter = p.fetch(R("pocketconcierge", "1", options={"seating": "counter"}))
-    assert [(s.time, s.detail) for s in counter] == [(time(18), "dinner · X · ¥1,000 · counter")]
 
 
 @respx.mock

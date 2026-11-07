@@ -12,13 +12,12 @@ Members-only "secret seats" are a separate listing and aren't checked.
 
 Options (in the restaurant's watchlist entry):
   include_waitlist = true   also report waitlist-only seatings (Info starts with "waitlist")
-  seating = ["counter"]     only these seating types: counter, private counter, private room,
-                            table, takeout, unspecified (the restaurant didn't say)
+
+Every seating type is reported; Info names the seating (counter, private room, ...).
 """
 
 from __future__ import annotations
 
-import re
 from datetime import date, datetime, time
 
 from ..models import Restaurant, Slot
@@ -35,7 +34,6 @@ SEATING_TYPES = {
     "TAKEOUT": "takeout",
     "NONE": "",
 }
-SEATING_ALIASES = {"UNSPECIFIED": "NONE", "ROOM": "PRIVATE_ROOM", "PRIVATE": "PRIVATE_ROOM"}
 
 CALENDAR = """query VenueAvailabilityCalendar($id: ID!) {
   venue(id: $id) { availabilityCalendar { reservationDates waitlistDates } }
@@ -99,7 +97,6 @@ class PocketConciergeProvider(Provider):
         if not dates:
             return []
         waitlist_ok = bool(r.options.get("include_waitlist"))
-        seating = seating_filter(r.options.get("seating"))
         self.report_date(r.name, dates[0], 1, len(dates))
         open_days, wait_days = self.calendar(r)
         wanted = open_days | (wait_days if waitlist_ok else set())
@@ -113,8 +110,6 @@ class PocketConciergeProvider(Provider):
             for a in self.seatings(r, d):
                 is_wait = a.get("__typename") == "WaitlistableAvailability"
                 if is_wait and not waitlist_ok:
-                    continue
-                if seating and (a.get("seatingType") or "NONE").upper() not in seating:
                     continue
                 lo, hi = a.get("minPartySize") or 1, a.get("maxPartySize") or 99
                 if not lo <= r.party_size <= hi:
@@ -140,23 +135,6 @@ class PocketConciergeProvider(Provider):
             )
             for (d, t), seatings in groups.items()
         )
-
-
-def seating_filter(value) -> set[str]:
-    """`seating` option -> set of API seating types. Accepts a string or list, any case,
-    with spaces/dashes: "counter", "private room", "table", ... Empty -> no filter."""
-    if not value:
-        return set()
-    items = [value] if isinstance(value, str) else list(value)
-    out = set()
-    for item in items:
-        key = re.sub(r"[\s-]+", "_", str(item).strip()).upper()
-        key = SEATING_ALIASES.get(key, key)
-        if key not in SEATING_TYPES:
-            known = "counter, private counter, private room, table, takeout, unspecified"
-            raise ProviderError(f"unknown Pocket Concierge seating {item!r} (use: {known})")
-        out.add(key)
-    return out
 
 
 def summarize(seatings: list[tuple[dict, bool]]) -> str:
