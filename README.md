@@ -127,6 +127,13 @@ uv run jap r test-email                 # test message to everyone any restauran
 uv run jap r test-email --to family     # ...or just a group / address
 ```
 
+Run it in the background on Windows (keeps going after the terminal closes; stops at logoff or restart):
+
+```powershell
+.\start-watch.ps1     # starts `jap r watch --email` hidden; PID in .state\watch.pid, output in .state\watch.log
+.\stop-watch.ps1      # stops it (and the python process under uv) and removes the PID file
+```
+
 - `watch` wakes up for `send_at`, runs a fresh check, then sends. The countdown shows the next digest time.
   If the computer was asleep at `send_at`, the digest goes out on the first check after it wakes.
 - First run (or after clearing `.state/`): everything currently open is new, so each person gets one alert
