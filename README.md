@@ -40,6 +40,26 @@ On each run, slots you haven't seen before are marked **NEW**; `--new-only` hide
 Seen slots are kept in `.state/seen_slots.json`. Use
 `-c` / `-s` to point at other watchlist / settings files.
 
+### UI (optional)
+
+A browser UI for both files plus the background watcher:
+
+```bash
+uv sync --extra ui
+uv run jap r ui                            # opens http://localhost:8501
+```
+
+- **Watcher**: running or not, Start / Stop (the same as `start-watch.ps1` / `stop-watch.ps1`), send a test email, the log.
+- **Settings (settings.toml)**: every `[settings]` and `[email]` option, plus recipient groups.
+- **Watchlist (watchlist.toml)**: `[defaults]` (party size, notify, windows) and each restaurant: name, enabled,
+  URL / platform / id, party size, notify, windows, and the platform's own options. Add and delete restaurants.
+
+Every field shows the file's value, or the built-in default when the file doesn't set it.
+Saving checks the file with the same rules the watcher uses and refuses to save if something is wrong.
+It keeps the old file in `.state/backups/` and rewrites the whole file with a comment on each setting.
+Your own comments and commented-out entries are not kept; use the Enabled box instead of commenting out.
+A running watcher keeps its old settings until you stop and start it.
+
 ### Watchlist format (`watchlist.toml`)
 
 ```toml

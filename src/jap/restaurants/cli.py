@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import random
 import time
 from pathlib import Path
@@ -37,6 +38,8 @@ def register(sub: argparse._SubParsersAction) -> None:
     m = rs.add_parser("menus", help="list a TableCheck shop's course ids (for `menu_item_id`)")
     m.add_argument("shop", help="TableCheck slug or URL")
     m.add_argument("--date", default=None, help="YYYY-MM-DD (default: today)")
+    u = rs.add_parser("ui", help="open the settings/watchlist UI in the browser (needs: uv sync --extra ui)")
+    u.add_argument("--port", type=int, default=8501)
     rs.add_parser("omakase-login", help="open a browser to sign in to OMAKASE (session is saved)")
     pr = rs.add_parser("omakase-probe", help="capture an OMAKASE restaurant page for parser development")
     pr.add_argument("slug")
@@ -76,6 +79,20 @@ def run(args) -> int:
             out = prov.probe(args.slug)
             console.print(f"Saved capture to [bold]{out}[/]")
         return 0
+
+    if args.action == "ui":
+        import importlib.util
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        if importlib.util.find_spec("streamlit") is None or importlib.util.find_spec("tomlkit") is None:
+            console.print("[red]The UI needs extra packages:[/] uv sync --extra ui  (then: uv run jap r ui)")
+            return 2
+        env = os.environ | {"JAP_WATCHLIST": args.config, "JAP_SETTINGS": args.settings, "JAP_STATE": args.state_dir}
+        app = Path(__file__).with_name("ui.py")
+        return subprocess.call([sys.executable, "-m", "streamlit", "run", str(app), "--server.port", str(args.port),
+                                "--browser.gatherUsageStats", "false"], env=env)
 
     if args.action == "menus":
         from datetime import date
