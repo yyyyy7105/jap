@@ -407,3 +407,13 @@ def test_tablecheck_overlapping_timetable_no_duplicates():
     slots = TableCheckProvider(delay=0).fetch(r)
     assert route.call_count >= 2
     assert [(s.date.day, s.time) for s in slots] == [(20, time(19)), (21, time(19))]
+
+
+def test_cli_commands_run(tmp_path, monkeypatch):
+    """Regression: a local import in cli.run once broke every `jap r` command."""
+    from jap import main
+
+    (tmp_path / "w.toml").write_text('[[restaurants]]\nurl = "https://www.tablecheck.com/en/shops/x/reserve"\n'
+                                     '  [[restaurants.windows]]\n  days = 3\n', encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    assert main(["r", "-c", "w.toml", "-s", "none.toml", "list"]) == 0

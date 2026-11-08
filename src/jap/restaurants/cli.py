@@ -84,7 +84,6 @@ def run(args) -> int:
         import importlib.util
         import subprocess
         import sys
-        from pathlib import Path
 
         if importlib.util.find_spec("streamlit") is None or importlib.util.find_spec("tomlkit") is None:
             console.print("[red]The UI needs extra packages:[/] uv sync --extra ui  (then: uv run jap r ui)")
