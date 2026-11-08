@@ -1,3 +1,4 @@
+import os
 from datetime import date, time
 
 import httpx
@@ -417,3 +418,41 @@ def test_cli_commands_run(tmp_path, monkeypatch):
                                      '  [[restaurants.windows]]\n  days = 3\n', encoding="utf-8")
     monkeypatch.chdir(tmp_path)
     assert main(["r", "-c", "w.toml", "-s", "none.toml", "list"]) == 0
+
+
+def test_watch_reloads_config_when_files_change(tmp_path, monkeypatch):
+    """Saving the watchlist (e.g. from the UI) is picked up by a running `watch` without a restart."""
+    from jap import main
+    from jap.restaurants import checker as checker_mod
+    from jap.restaurants import cli
+
+    w = tmp_path / "w.toml"
+    entry = '[[restaurants]]\nname = "{0}"\nurl = "https://www.tablecheck.com/en/shops/{0}/reserve"\n  [[restaurants.windows]]\n  days = 3\n'
+    w.write_text(entry.format("one"), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    rounds = []
+
+    def fake_check_all(self, restaurants):
+        rounds.append([r.name for r in restaurants])
+        self.last_scan = None
+        return []
+
+    waits = []
+
+    def fake_wait(seconds, digest_at=None, stop_early=None):
+        waits.append(1)
+        if len(waits) == 1:  # while waiting, the file is saved with a second restaurant
+            w.write_text(entry.format("one") + entry.format("two"), encoding="utf-8")
+            os.utime(w, (w.stat().st_atime, w.stat().st_mtime + 5))
+            return stop_early()
+        if len(waits) == 2:  # a broken save keeps the last good config
+            w.write_text("[[restaurants]]\nplatform = 'nope'\n", encoding="utf-8")
+            os.utime(w, (w.stat().st_atime, w.stat().st_mtime + 10))
+            return stop_early()
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(checker_mod.Checker, "check_all", fake_check_all)
+    monkeypatch.setattr(cli, "wait_with_countdown", fake_wait)
+    monkeypatch.setattr(cli.time, "sleep", lambda s: None)
+    assert main(["r", "-c", "w.toml", "-s", "none.toml", "watch", "--no-email"]) == 0
+    assert rounds == [["one"], ["one", "two"], ["one", "two"]]

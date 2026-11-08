@@ -265,7 +265,7 @@ def tab_watcher():
     if c3.button("Send test email", width="stretch", help="`jap r test-email`: one short message to everyone"):
         with st.spinner("Sending..."):
             st.code(run_jap("test-email"))
-    st.caption("Saved changes take effect when the watcher starts, so stop and start it after saving.")
+    st.caption("Saved changes are picked up by the running watcher automatically (it re-reads both files and checks again).")
 
     st.subheader("Log")
     n = st.slider("Lines", 20, 500, 80, step=20)
@@ -385,7 +385,7 @@ def tab_settings():
     if err:
         st.error(f"Not saved: {err}")
     else:
-        st.success("Saved settings.toml (old version backed up in .state/backups/). Restart the watcher to apply.")
+        st.success("Saved settings.toml (old version backed up in .state/backups/). A running watcher picks it up within seconds and checks again.")
 
 
 # -- watchlist.toml --------------------------------------------------------
@@ -559,7 +559,7 @@ def tab_watchlist():
         st.error(f"Not saved: {err}")
     else:
         init_watchlist_state(force=True)
-        st.success("Saved watchlist.toml (old version backed up in .state/backups/). Restart the watcher to apply.")
+        st.success("Saved watchlist.toml (old version backed up in .state/backups/). A running watcher picks it up within seconds and checks again.")
 
 
 def build_watchlist(d_party, d_notify, d_windows, restaurants):

@@ -48,8 +48,9 @@ def register(sub: argparse._SubParsersAction) -> None:
     p.set_defaults(func=run)
 
 
-def wait_with_countdown(seconds: float, digest_at=None) -> None:
-    """Sleep, showing a live 'next check at ...' line instead of a silent console."""
+def wait_with_countdown(seconds: float, digest_at=None, stop_early=None) -> bool:
+    """Sleep, showing a live 'next check at ...' line instead of a silent console.
+    stop_early() is polled every second; returns True if it ended the wait."""
     from datetime import datetime, timedelta
 
     end = time.monotonic() + seconds
@@ -60,6 +61,13 @@ def wait_with_countdown(seconds: float, digest_at=None) -> None:
             m, s = divmod(int(left + 0.999), 60)
             status.update(f"[dim]Next check at {at:%H:%M:%S} (in {m}:{s:02d}){extra} - Ctrl+C to stop[/]")
             time.sleep(min(1.0, left))
+            if stop_early and stop_early():
+                return True
+    return False
+
+
+def _mtimes(*paths) -> tuple:
+    return tuple(Path(p).stat().st_mtime if Path(p).exists() else None for p in paths)
 
 
 def _recipients_by_restaurant(restaurants, email_cfg: EmailConfig | None) -> dict[tuple[str, str], list[str]]:
@@ -94,7 +102,7 @@ def run(args) -> int:
         app = Path(__file__).with_name("ui.py")
         # headless: skips Streamlit's first-run email prompt, which hangs without a real terminal
         cmd = [sys.executable, "-m", "streamlit", "run", str(app), "--server.port", str(args.port),
-               "--server.address", args.host, "--server.headless", "true", "--browser.gatherUsageStats", "false"]
+               "--server.address", args.host, "--server.headless", "true", "--server.runOnSave", "true", "--browser.gatherUsageStats", "false"]
         url = f"http://localhost:{args.port}"
         console.print(f"UI at {url}  (Ctrl+C to stop)")
         if not args.no_browser:
@@ -190,18 +198,53 @@ def run(args) -> int:
         headless=bool(settings.get("headless", True)),
     )
     seen = SeenStore(state / "seen_slots.json")
-    digest = DailyDigest(email_cfg, state / "email_digest.json") if use_email else None
-    all_recipients = sorted({a for v in rcpts.values() for a in v})
+    cur = {
+        "restaurants": restaurants,
+        "settings": settings,
+        "email_cfg": email_cfg,
+        "rcpts": rcpts,
+        "digest": DailyDigest(email_cfg, state / "email_digest.json") if use_email else None,
+    }
+
+    def reload() -> bool:
+        """Re-read both files (the watcher picks up saves from the UI / an editor).
+        A broken file keeps the previous config. Returns True if anything was applied."""
+        try:
+            rs = load_watchlist(args.config)
+            st_ = load_settings(args.settings)
+            ec = EmailConfig.from_settings(st_.get("email"))
+            rc = _recipients_by_restaurant(rs, ec)
+        except (ConfigError, NotifyError, ValueError) as e:
+            console.print(f"[red]Config changed but has an error, keeping the previous one:[/] {e}")
+            return False
+        want_email = ec.enabled if (ec and args.email is None) else bool(args.email)
+        if want_email and not ec:
+            console.print(f"[red]Config changed: email is on but {args.settings} has no [email]; email paused.[/]")
+            want_email = False
+        dg = cur["digest"]
+        if want_email:
+            if dg is None:
+                dg = DailyDigest(ec, state / "email_digest.json")
+            dg.cfg = ec
+        else:
+            dg = None
+        cur.update(restaurants=rs, settings=st_, email_cfg=ec, rcpts=rc, digest=dg)
+        checker.set_delay(float(st_.get("request_delay", 0.4)))
+        checker.headless = bool(st_.get("headless", True))
+        console.print(f"[cyan]Config reloaded:[/] {len(rs)} restaurant(s), email {'on' if dg else 'off'}")
+        return True
 
     def run_round():
         with console.status("Checking...") as status:
             checker.progress = lambda m: status.update(f"Checking {m}")
             try:
-                return checker.check_all(restaurants)
+                return checker.check_all(cur["restaurants"])
             finally:
                 checker.progress = None
 
     def one_round(force_digest: bool = False) -> list:
+        digest, rcpts = cur["digest"], cur["rcpts"]
+        all_recipients = sorted({a for v in rcpts.values() for a in v})
         results = run_round()
         current = [s for res in results for s in res.slots]
         new, _ = seen.split(current)
@@ -239,13 +282,19 @@ def run(args) -> int:
             one_round(force_digest=True)
             return 0
 
-        interval = args.interval or int(settings.get("interval_seconds", 600))
+        def interval() -> int:
+            return args.interval or int(cur["settings"].get("interval_seconds", 600))
+
         mail = ""
         if use_email:
-            mail = f", emailing {len(all_recipients)} recipient(s): new slots right away"
+            n = len({a for v in rcpts.values() for a in v})
+            mail = f", emailing {n} recipient(s): new slots right away"
             if email_cfg.send_at is not None:
                 mail += f" + daily digest at {email_cfg.send_at:%H:%M}"
-        console.print(f"Watching {len(restaurants)} restaurant(s) every ~{interval}s{mail}. Ctrl+C to stop.")
+        console.print(f"Watching {len(restaurants)} restaurant(s) every ~{interval()}s{mail}. Ctrl+C to stop.")
+        console.print(f"[dim]Edits to {args.config} / {args.settings} are picked up automatically.[/]")
+        files = (args.config, args.settings)
+        stamp = _mtimes(*files)
         while True:
             try:
                 if one_round():
@@ -255,15 +304,19 @@ def run(args) -> int:
             except Exception as e:  # never let one bad round end an overnight watch
                 console.print(f"[red]Round failed:[/] {type(e).__name__}: {e} - will try again next round")
             # jitter so we don't hit the sites on an exact schedule; wake up for the digest time
-            wait = interval * random.uniform(0.85, 1.15)
+            wait = interval() * random.uniform(0.85, 1.15)
             digest_at = None
-            if digest:
+            if cur["digest"]:
                 from datetime import datetime
 
-                digest_at = digest.next_send()
+                digest_at = cur["digest"].next_send()
                 if digest_at:
                     wait = min(wait, (digest_at - datetime.now()).total_seconds() + 1)
-            wait_with_countdown(max(wait, 1), digest_at)
+            changed = wait_with_countdown(max(wait, 1), digest_at, lambda: _mtimes(*files) != stamp)
+            if changed or _mtimes(*files) != stamp:
+                time.sleep(1)  # let the writer finish
+                stamp = _mtimes(*files)
+                reload()  # then check right away with the new config
     except KeyboardInterrupt:
         console.print("\nStopped.")
         return 0

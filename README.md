@@ -58,7 +58,8 @@ Every field shows the file's value, or the built-in default when the file doesn'
 Saving checks the file with the same rules the watcher uses and refuses to save if something is wrong.
 It keeps the old file in `.state/backups/` and rewrites the whole file with a comment on each setting.
 Your own comments and commented-out entries are not kept; use the Enabled box instead of commenting out.
-A running watcher keeps its old settings until you stop and start it.
+A running watcher notices the saved file within a second, reloads it and checks again (no restart).
+If the new file has an error, it keeps the previous settings and says so in the log.
 
 ### Watchlist format (`watchlist.toml`)
 

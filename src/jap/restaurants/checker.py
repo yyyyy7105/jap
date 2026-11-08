@@ -32,6 +32,12 @@ class Checker:
             self._providers[platform].progress = self._emit
         return self._providers[platform]
 
+    def set_delay(self, delay: float) -> None:
+        """Change the pause between requests, also for providers already created."""
+        self.delay = delay
+        for p in self._providers.values():
+            p.delay = delay
+
     def _emit(self, msg: str) -> None:
         if self.progress:
             self.progress(f"{self._prefix} {msg}" if self._prefix else msg)
