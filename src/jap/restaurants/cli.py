@@ -40,6 +40,8 @@ def register(sub: argparse._SubParsersAction) -> None:
     m.add_argument("--date", default=None, help="YYYY-MM-DD (default: today)")
     u = rs.add_parser("ui", help="open the settings/watchlist UI in the browser (needs: uv sync --extra ui)")
     u.add_argument("--port", type=int, default=8501)
+    u.add_argument("--no-browser", action="store_true", help="don't open a browser tab")
+    u.add_argument("--host", default="127.0.0.1", help="address to listen on (default: this PC only; 0.0.0.0 = whole network)")
     rs.add_parser("omakase-login", help="open a browser to sign in to OMAKASE (session is saved)")
     pr = rs.add_parser("omakase-probe", help="capture an OMAKASE restaurant page for parser development")
     pr.add_argument("slug")
@@ -90,8 +92,17 @@ def run(args) -> int:
             return 2
         env = os.environ | {"JAP_WATCHLIST": args.config, "JAP_SETTINGS": args.settings, "JAP_STATE": args.state_dir}
         app = Path(__file__).with_name("ui.py")
-        return subprocess.call([sys.executable, "-m", "streamlit", "run", str(app), "--server.port", str(args.port),
-                                "--browser.gatherUsageStats", "false"], env=env)
+        # headless: skips Streamlit's first-run email prompt, which hangs without a real terminal
+        cmd = [sys.executable, "-m", "streamlit", "run", str(app), "--server.port", str(args.port),
+               "--server.address", args.host, "--server.headless", "true", "--browser.gatherUsageStats", "false"]
+        url = f"http://localhost:{args.port}"
+        console.print(f"UI at {url}  (Ctrl+C to stop)")
+        if not args.no_browser:
+            import threading
+            import webbrowser
+
+            threading.Timer(3, webbrowser.open, [url]).start()
+        return subprocess.call(cmd, env=env)
 
     if args.action == "menus":
         from datetime import date
