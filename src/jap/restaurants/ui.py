@@ -122,25 +122,7 @@ def commented(table, key, value, note: str = ""):
     table.add(key, item)
 
 
-# -- windows <-> editor rows ----------------------------------------------
-def window_to_row(w: dict) -> dict:
-    if "days" in w:
-        kind = "rolling days"
-    elif "date" in w:
-        kind = "single date"
-    else:
-        kind = "date range"
-    return {
-        "kind": kind,
-        "days": int(w["days"]) if "days" in w else None,
-        "start_date": to_date(w.get("date") or w.get("start_date")),
-        "end_date": to_date(w.get("end_date")),
-        "start_time": to_time(w.get("start_time"), "00:00"),
-        "end_time": to_time(w.get("end_time"), "23:59"),
-        "weekdays": ", ".join(str(x).lower()[:3] for x in w.get("weekdays") or []),
-    }
-
-
+# -- watch windows: one card per window, fields depend on its kind ---------
 def is_blank(v) -> bool:
     try:
         return v is None or v != v or v == ""  # None, NaN/NaT, ""
@@ -148,75 +130,94 @@ def is_blank(v) -> bool:
         return False
 
 
-def row_to_window(row: dict) -> dict:
-    kind = row.get("kind") or "rolling days"
-    w: dict = {}
-    if kind == "rolling days":
-        w["days"] = int(row["days"]) if not is_blank(row.get("days")) else 14
-    elif kind == "single date":
-        if is_blank(row.get("start_date")):
-            raise ValueError("a 'single date' window needs start_date")
-        w["date"] = to_date(row["start_date"]).isoformat()
-    else:
-        if is_blank(row.get("start_date")):
-            raise ValueError("a 'date range' window needs start_date")
-        w["start_date"] = to_date(row["start_date"]).isoformat()
-        end = row.get("end_date")
-        w["end_date"] = to_date(end).isoformat() if not is_blank(end) else w["start_date"]
-    st_, et = row.get("start_time"), row.get("end_time")
-    w["start_time"] = (to_time(st_, "00:00") if not is_blank(st_) else time(0, 0)).strftime("%H:%M")
-    w["end_time"] = (to_time(et, "23:59") if not is_blank(et) else time(23, 59)).strftime("%H:%M")
-    days = [d.strip().lower()[:3] for d in str(row.get("weekdays") or "").split(",") if d.strip()]
-    if days:
-        bad = [d for d in days if d not in WEEKDAY_NAMES]
-        if bad:
-            raise ValueError(f"weekdays: use mon..sun, got {', '.join(bad)}")
-        w["weekdays"] = days
-    return w
+def window_kind(w: dict) -> str:
+    if "days" in w:
+        return "rolling days"
+    if "date" in w:
+        return "single date"
+    if "start_date" in w:
+        return "date range"
+    return "rolling days"
+
+
+def window_fields(key: str, w: dict, n: int) -> dict | None:
+    """Widgets for one window; returns it as TOML-ready dict, or None if deleted."""
+    today = date.today()
+    with st.container(border=True):
+        c1, c2 = st.columns([4, 1])
+        kind = c1.selectbox(
+            f"Window {n}", KINDS, index=KINDS.index(window_kind(w)), key=f"{key}_kind",
+            help="rolling days = today + the next N-1 days (Tokyo), moves forward every day; "
+                 "date range = from one date to another; single date = one day",
+        )
+        c2.write("")
+        delete = c2.button("Remove", key=f"{key}_del", width="stretch")
+
+        out: dict = {}
+        c1, c2 = st.columns(2)
+        if kind == "rolling days":
+            out["days"] = int(c1.number_input("Days", min_value=1, max_value=366, step=1,
+                                              value=int(w.get("days", 14)), key=f"{key}_days",
+                                              help="today + the next N-1 days (1-366)"))
+        elif kind == "single date":
+            d = c1.date_input("Date", value=to_date(w.get("date") or w.get("start_date")) or today,
+                              key=f"{key}_date", format="YYYY-MM-DD")
+            out["date"] = d.isoformat()
+        else:
+            start = to_date(w.get("start_date") or w.get("date")) or today
+            end = to_date(w.get("end_date")) or start
+            s = c1.date_input("From date", value=start, key=f"{key}_start", format="YYYY-MM-DD")
+            e = c2.date_input("To date", value=max(end, s), min_value=s, key=f"{key}_end", format="YYYY-MM-DD")
+            out["start_date"], out["end_date"] = s.isoformat(), e.isoformat()
+
+        c1, c2, c3 = st.columns([1, 1, 2])
+        t1 = c1.time_input("Earliest start", value=to_time(w.get("start_time"), "00:00"), step=300,
+                           key=f"{key}_t1", help="Tokyo time (default 00:00)")
+        t2 = c2.time_input("Latest start", value=to_time(w.get("end_time"), "23:59"), step=300,
+                           key=f"{key}_t2", help="Tokyo time (default 23:59)")
+        days = []
+        if kind != "single date":  # weekdays only filter multi-day windows
+            days = c3.multiselect("Only on", WEEKDAY_NAMES,
+                                  default=[str(x).lower()[:3] for x in w.get("weekdays") or []
+                                           if str(x).lower()[:3] in WEEKDAY_NAMES],
+                                  key=f"{key}_wd", placeholder="every day", help="empty = every day")
+        out["start_time"], out["end_time"] = t1.strftime("%H:%M"), t2.strftime("%H:%M")
+        if days:
+            out["weekdays"] = sorted(days, key=WEEKDAY_NAMES.index)
+        if t2 < t1:
+            st.warning("Latest start is before earliest start, so nothing will match.")
+    return None if delete else out
 
 
 def windows_editor(key: str, windows: list[dict]) -> list[dict]:
-    """Editable table of watch windows; returns the rows as dicts."""
-    import pandas as pd
-
-    rows = [window_to_row(w) for w in windows]
-    df = pd.DataFrame(rows, columns=["kind", "days", "start_date", "end_date", "start_time", "end_time", "weekdays"])
-    edited = st.data_editor(
-        df,
-        key=key,
-        num_rows="dynamic",
-        width="stretch",
-        hide_index=True,
-        column_config={
-            "kind": st.column_config.SelectboxColumn("Kind", options=KINDS, required=True, default="rolling days",
-                                                     help="rolling days = today + the next N-1 days (Tokyo); "
-                                                          "date range = start..end; single date = start_date only"),
-            "days": st.column_config.NumberColumn("Days", min_value=1, max_value=366, step=1,
-                                                  help="rolling days only (1-366)"),
-            "start_date": st.column_config.DateColumn("Start date", format="YYYY-MM-DD"),
-            "end_date": st.column_config.DateColumn("End date", format="YYYY-MM-DD", help="date range only"),
-            "start_time": st.column_config.TimeColumn("From", format="HH:mm", default=time(0, 0),
-                                                      help="earliest start time, JST (default 00:00)"),
-            "end_time": st.column_config.TimeColumn("To", format="HH:mm", default=time(23, 59),
-                                                    help="latest start time, JST (default 23:59)"),
-            "weekdays": st.column_config.TextColumn("Weekdays", help="optional, e.g. fri, sat (empty = every day)"),
-        },
-    )
-    return edited.to_dict("records")
+    """A card per window plus an Add button; returns the windows as dicts."""
+    lk = f"{key}__list"
+    if lk not in st.session_state:
+        st.session_state[lk] = [{"uid": uuid.uuid4().hex[:8], **w} for w in windows]
+    items = st.session_state[lk]
+    out, kept = [], []
+    for n, w in enumerate(items, 1):
+        res = window_fields(f"{key}_{w['uid']}", w, n)
+        if res is not None:
+            out.append(res)
+            kept.append(w)
+    if len(kept) != len(items):  # Remove was pressed
+        st.session_state[lk] = kept
+        st.rerun()
+    if st.button("+ Add window", key=f"{key}_add"):
+        items.append({"uid": uuid.uuid4().hex[:8], "days": 14})
+        st.rerun()
+    if not out:
+        st.caption("No windows.")
+    return out
 
 
-def windows_aot(rows: list[dict], where: str):
+def windows_aot(windows: list[dict], where: str):
     aot = tomlkit.aot()
-    for i, row in enumerate(rows):
-        if all(is_blank(row.get(k)) for k in ("kind", "days", "start_date", "end_date", "weekdays")):
-            continue  # the empty row the editor shows for adding
-        try:
-            w = row_to_window(row)
-        except ValueError as e:
-            raise ConfigError(f"{where} window {i + 1}: {e}") from e
+    for w in windows:
         t = tomlkit.table()
-        for k, v in w.items():
-            t.add(k, v)
+        for k_, v in w.items():
+            t.add(k_, v)
         aot.append(t)
     return aot
 
@@ -490,11 +491,11 @@ def restaurant_block(r: dict, groups: list[str]) -> dict:
         return None
     out = {"uid": uid, "name": name.strip(), "enabled": enabled, "url": url.strip(),
            "platform": platform if platform in PLATFORMS else "", "id": rid.strip(), "party_size": int(party),
-           "_windows_rows": windows, "_opts": opts}
+           "_windows": windows, "_opts": opts}
     if notify is not None:
         out["notify"] = notify
     out["_extra"] = {k: v for k, v in r.items()
-                     if k not in RESTAURANT_KEYS | ALL_OPTION_KEYS | {"uid", "_windows_rows", "_opts", "_extra"}}
+                     if k not in RESTAURANT_KEYS | ALL_OPTION_KEYS | {"uid", "_windows", "_opts", "_extra"}}
     return out
 
 
@@ -599,8 +600,8 @@ def build_watchlist(d_party, d_notify, d_windows, restaurants):
                 t.add(k, v)
         for k, v in r["_extra"].items():
             t.add(k, v)
-        if r["_windows_rows"] is not None:
-            w = windows_aot(r["_windows_rows"], label)
+        if r["_windows"] is not None:
+            w = windows_aot(r["_windows"], label)
             if not len(w):
                 raise ConfigError(f"{label}: add a window or tick 'Use [defaults] windows'")
             t.add("windows", w)
