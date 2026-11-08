@@ -41,7 +41,7 @@ def register(sub: argparse._SubParsersAction) -> None:
     u = rs.add_parser("ui", help="open the settings/watchlist UI in the browser (needs: uv sync --extra ui)")
     u.add_argument("--port", type=int, default=8501)
     u.add_argument("--no-browser", action="store_true", help="don't open a browser tab")
-    u.add_argument("--host", default="127.0.0.1", help="address to listen on (default: this PC only; 0.0.0.0 = whole network)")
+    u.add_argument("--host", default="0.0.0.0", help="address to listen on (default 0.0.0.0 = whole network; 127.0.0.1 = this PC only)")
     rs.add_parser("omakase-login", help="open a browser to sign in to OMAKASE (session is saved)")
     pr = rs.add_parser("omakase-probe", help="capture an OMAKASE restaurant page for parser development")
     pr.add_argument("slug")

@@ -46,7 +46,7 @@ A browser UI for both files plus the background watcher:
 
 ```bash
 uv sync --extra ui
-uv run jap r ui                            # opens http://localhost:8501 (this PC only; --host 0.0.0.0 for your network)
+uv run jap r ui                            # opens http://localhost:8501, also reachable from your network (--host 127.0.0.1 = this PC only)
 ```
 
 - **Watcher**: running or not, Start / Stop (the same as `start-watch.ps1` / `stop-watch.ps1`), send a test email, the log.
