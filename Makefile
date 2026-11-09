@@ -15,7 +15,7 @@ help:
 	@echo make start       start the watcher in the background, with email
 	@echo make stop        stop the background watcher
 	@echo make restart     stop, then start
-	@echo make status      running? + the end of the log
+	@echo make status      watcher and UI up? + the end of the log
 	@echo make digest      check now and email everyone the full list of open slots
 	@echo make test-email  send a short test email to everyone
 	@echo make ui          the UI on port $(PORT), reachable from your whole network
@@ -42,7 +42,7 @@ stop:
 restart: stop start
 
 status:
-	$(JAP) status
+	$(JAP) status --ui-port $(PORT)
 
 log: status
 

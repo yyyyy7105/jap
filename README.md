@@ -43,7 +43,8 @@ uv run jap r stop                          # stop the background watcher
 `choco install make`):
 
 ```bash
-make start      # = jap r start      make stop / restart / status
+make start      # = jap r start      make stop / restart
+make status     # watcher running? UI up? + the end of the log
 make check      # = jap r check      make watch / list / digest / test-email
 make ui         # the UI, always on 0.0.0.0 (your whole network), port 8501 (PORT=... to change)
 make sync       # uv sync --extra ui  make test

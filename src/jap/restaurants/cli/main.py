@@ -38,7 +38,8 @@ def register(sub: argparse._SubParsersAction) -> None:
     s = rs.add_parser("start", help="start the watcher in the background (with email); same as the UI's Start")
     s.add_argument("--no-email", action="store_true", help="don't send email")
     rs.add_parser("stop", help="stop the background watcher")
-    rs.add_parser("status", help="is the background watcher running? + the end of the log")
+    stt = rs.add_parser("status", help="are the background watcher and the UI running? + the end of the log")
+    stt.add_argument("--ui-port", type=int, default=8501, help="port the UI should be on (default 8501)")
     rs.add_parser("digest", help="check now and send everyone the full list of open slots")
     t = rs.add_parser("test-email", help="send a test email (default: everyone any restaurant notifies)")
     t.add_argument("--to", action="append", default=[], help="address or group to send to instead")
@@ -90,7 +91,15 @@ def run(args) -> int:
         return 0
     if action == "status":
         pid = watch.running_pid(state)
-        console.print(f"[green]Running[/] (PID {pid})" if pid else "Not running")
+        console.print(f"Watcher: [green]running[/] (PID {pid})" if pid else "Watcher: [yellow]not running[/]")
+        url = f"http://127.0.0.1:{args.ui_port}"
+        try:
+            import httpx
+
+            up = httpx.get(f"{url}/_stcore/health", timeout=2).text.strip() == "ok"
+        except Exception:
+            up = False
+        console.print(f"UI:      [green]up[/] at {url}" if up else f"UI:      [yellow]not running[/] (port {args.ui_port})")
         log = watch.log_path(state)
         if log.exists():
             console.print(f"[dim]--- last lines of {log} ---[/]")
