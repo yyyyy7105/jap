@@ -251,32 +251,104 @@ def tab_watcher():
             st.rerun()
         except RuntimeError as e:
             st.error(str(e))
-    checking = watch.running_pid(STATE, watch.CHECK_PID_NAME)
-    if c3.button("Checking..." if checking else "Check now", width="stretch", disabled=bool(checking),
-                 help="same as `jap r check`: one round in the background, no email. "
-                      "Each restaurant shows up in the log as it finishes."):
-        try:
-            watch.start_check_background(WATCHLIST, SETTINGS, STATE, root=ROOT, source="ui")
-            st.rerun()
-        except RuntimeError as e:
-            st.error(str(e))
+    mc = manual_check()
+    if c3.button("Checking..." if mc["running"] else "Check now", width="stretch", disabled=mc["running"],
+                 help="one check round run by the UI itself, no email. Progress streams below; "
+                      "the result is appended to the shared log, marked as checked manually."):
+        start_manual_check()
+        st.rerun()
     if c4.button("Send test email", width="stretch", help="same as `jap r test-email`: one short message to everyone"):
         with st.spinner("Sending..."):
             st.code(run_jap("test-email"))
     st.caption("Saved changes are picked up by the running watcher automatically (it re-reads both files and checks again).")
 
+    manual_check_view()
     st.subheader("Log")
     st.slider("Lines", 20, 500, 80, step=20, key="log_lines")
     log_view()
+
+
+# -- Check now: runs in a thread of the UI process, streams its progress ----------
+@st.cache_resource
+def manual_check() -> dict:
+    """One shared record for the UI process (all browser tabs see the same check)."""
+    import threading
+
+    return {"lock": threading.Lock(), "running": False, "progress": "", "lines": [], "step": (0, 0),
+            "started": None, "finished": None, "error": None}
+
+
+def start_manual_check() -> None:
+    import threading
+
+    mc = manual_check()
+    with mc["lock"]:
+        if mc["running"]:
+            return
+        mc.update(running=True, progress="starting...", lines=[], step=(0, 0),
+                  started=datetime.now(), finished=None, error=None)
+
+    def on_text(text: str) -> None:
+        with mc["lock"]:
+            mc["lines"].append(text)
+            if "] " in text and "/" in text.split("]")[0]:  # "  [3/7] Name: ..." -> progress bar
+                try:
+                    i, n = text.split("[", 1)[1].split("]")[0].split("/")
+                    mc["step"] = (int(i), int(n))
+                except ValueError:
+                    pass
+
+    def on_progress(msg: str) -> None:
+        with mc["lock"]:
+            mc["progress"] = msg
+
+    def work() -> None:
+        out = watch.Output(STATE, terminal=False, on_text=on_text, on_progress=on_progress)
+        session = None
+        try:
+            session = watch.WatchSession(WATCHLIST, SETTINGS, STATE, out, email=False,
+                                         source="checked manually from the UI")
+            session.one_round()
+        except Exception as e:  # shown in the UI and in the log
+            out.log(f"[red]Manual check failed:[/] {type(e).__name__}: {e}")
+            with mc["lock"]:
+                mc["error"] = f"{type(e).__name__}: {e}"
+        finally:
+            if session:
+                session.close()
+            out.close()
+            with mc["lock"]:
+                mc.update(running=False, finished=datetime.now(), progress="")
+
+    threading.Thread(target=work, name="jap-manual-check", daemon=True).start()
+
+
+@st.fragment(run_every=1)
+def manual_check_view():
+    """Live view of the current / last manual check."""
+    mc = manual_check()
+    with mc["lock"]:
+        running, lines, progress = mc["running"], list(mc["lines"]), mc["progress"]
+        (i, n), started, finished, error = mc["step"], mc["started"], mc["finished"], mc["error"]
+    if not started:
+        return
+    if running:
+        secs = (datetime.now() - started).total_seconds()
+        st.info(f"Checking manually · {secs:.0f}s · {progress}")
+        st.progress(i / n if n else 0.0, text=f"{i}/{n} restaurants done" if n else "starting")
+    elif error:
+        st.error(f"Manual check failed: {error}")
+    else:
+        st.success(f"Manual check finished at {finished:%H:%M:%S} "
+                   f"({(finished - started).total_seconds():.0f}s). Added to the log below.")
+    with st.expander("Manual check output", expanded=running):
+        st.code("\n".join(lines) or "(nothing yet)", language=None)
 
 
 @st.fragment(run_every=3)
 def log_view():
     """The shared log, newest at the bottom; refreshes itself every few seconds."""
     log = watch.log_path(STATE)
-    checking = watch.running_pid(STATE, watch.CHECK_PID_NAME)
-    if checking:
-        st.info(f"A check is running (PID {checking}); each restaurant appears below as it finishes.")
     if log.exists():
         lines = log.read_text(encoding="utf-8", errors="replace").splitlines()
         st.code("\n".join(lines[-st.session_state.get("log_lines", 80):]) or "(empty)", language=None)

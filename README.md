@@ -54,9 +54,9 @@ Seen slots are kept in `.state/seen_slots.json`. Use
 `-c` / `-s` to point at other watchlist / settings files.
 
 **One log:** every check, from the CLI (`check`, `digest`, `watch`, `start`) or the UI, is appended to
-`.state/watch.log`: a "Check started (cli / ui / background ...)" line, one line per restaurant as it finishes,
-rate-limit waits, then the same tables you see in the terminal, plus timestamped lines for
-emails sent, config reloads and errors. It rolls over to `watch.log.1` past 5 MB.
+`.state/watch.log`: a "Check started (where from)" line, one line per restaurant as it finishes,
+rate-limit waits, the same tables you see in the terminal and a "Check finished" line, plus timestamped
+lines for emails sent, config reloads and errors. It rolls over to `watch.log.1` past 5 MB.
 
 **Code layout:** `src/jap/restaurants/` holds the shared core (`watch.py` is the watch loop, logging and
 background start/stop; plus `config.py`, `checker.py`, `notify.py`, `providers/`). The two front ends
@@ -71,8 +71,10 @@ uv sync --extra ui
 uv run jap r ui                            # opens http://localhost:8501, also reachable from your network (--host 127.0.0.1 = this PC only)
 ```
 
-- **Watcher**: running or not, Start / Stop (the same as `jap r start` / `jap r stop`), Check now (`jap r check`),
-  send a test email, and the shared log.
+- **Watcher**: running or not, Start / Stop (the same as `jap r start` / `jap r stop`), send a test email,
+  and the shared log (refreshes itself).
+- **Check now**: the UI runs one check itself (no email), streams its progress live on the page, and appends
+  the result to the shared log marked "checked manually from the UI". One at a time.
 - **Settings (settings.toml)**: every `[settings]` and `[email]` option, plus recipient groups.
 - **Watchlist (watchlist.toml)**: `[defaults]` (party size, notify, windows) and each restaurant: name, enabled,
   URL / platform / id, party size, notify, windows, and the platform's own options. Add and delete restaurants.

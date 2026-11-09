@@ -11,6 +11,7 @@ and the UI (its Start / Stop buttons and log view).
 
 from __future__ import annotations
 
+import io
 import os
 import random
 import subprocess
@@ -21,6 +22,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from rich.console import Console
+from rich.text import Text
 
 from .checker import Checker, SeenStore
 from .config import ConfigError, load_settings, load_watchlist
@@ -30,7 +32,6 @@ from .report import print_results
 
 LOG_NAME = "watch.log"
 PID_NAME = "watch.pid"
-CHECK_PID_NAME = "check.pid"  # a one-off background check (the UI's Check now)
 ERR_NAME = "watch.err.log"  # Python crashes of the background process (normally empty)
 MAX_LOG_BYTES = 5_000_000  # rotate to watch.log.1 beyond this
 
@@ -45,10 +46,15 @@ def pid_path(state_dir: str | Path, name: str = PID_NAME) -> Path:
 
 # -- output: terminal + shared log file ---------------------------------------
 class Output:
-    """Prints to the terminal console (optional) and appends the same text to the log."""
+    """Prints to the terminal console (optional) and appends the same text to the log.
 
-    def __init__(self, state_dir: str | Path, terminal: bool = True):
+    on_text(str): also receives every printed block as plain text (live view in the UI).
+    on_progress(str): receives the live status line (which restaurant / date is being checked).
+    """
+
+    def __init__(self, state_dir: str | Path, terminal: bool = True, on_text=None, on_progress=None):
         self.term = terminal_console if terminal else None
+        self.on_text, self.on_progress = on_text, on_progress
         path = log_path(state_dir)
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.exists() and path.stat().st_size > MAX_LOG_BYTES:
@@ -57,16 +63,25 @@ class Output:
         self.file = Console(file=self._fh, width=150, color_system=None, force_terminal=False,
                             highlight=False, emoji=False, log_path=False)
 
+    def _listen(self, method: str, *args, **kw) -> None:
+        if self.on_text:
+            buf = io.StringIO()
+            c = Console(file=buf, width=150, color_system=None, force_terminal=False, highlight=False, emoji=False)
+            getattr(c, method)(*args, **kw)
+            self.on_text(buf.getvalue().rstrip("\n"))
+
     def print(self, *objects, **kw) -> None:
         if self.term:
             self.term.print(*objects, **kw)
         self.file.print(*objects, **kw)
         self._fh.flush()
+        self._listen("print", *objects, **kw)
 
     def rule(self, *args, **kw) -> None:
         if self.term:
             self.term.rule(*args, **kw)
         self.file.rule(*args, **kw)
+        self._listen("rule", *args, **kw)
 
     def log(self, msg: str) -> None:
         """One timestamped line."""
@@ -74,16 +89,24 @@ class Output:
 
     @contextmanager
     def status(self, msg: str = ""):
-        """A live spinner on the terminal only (not logged)."""
+        """A live status line: a spinner on a terminal and/or on_progress (not logged)."""
+        listener = self.on_progress
+
+        class _Fanout:
+            def __init__(self, inner=None):
+                self.inner = inner
+
+            def update(self, m="", *a, **k):
+                if self.inner:
+                    self.inner.update(m, *a, **k)
+                if listener:
+                    listener(Text.from_markup(str(m)).plain)
+
         if self.term and self.term.is_terminal:
             with self.term.status(msg, spinner="dots") as st:
-                yield st
+                yield _Fanout(st)
         else:
-            class _Quiet:
-                def update(self, *_a, **_k):
-                    pass
-
-            yield _Quiet()
+            yield _Fanout()
 
     def close(self) -> None:
         self._fh.close()
@@ -214,6 +237,8 @@ class WatchSession:
         new, _ = self.seen.split(current)
         scan = self.checker.last_scan
         print_results(results, {s.key for s in new}, show_all=self.show_all, scan=scan, console=self.out)
+        took = f" in {(scan.finished - scan.started).total_seconds():.0f}s" if scan else ""
+        self.out.log(f"Check finished ({self.source}){took}: {len(current)} open, {len(new)} new")
         self.seen.update(results)
         if self.digest:
             rcpts = self.rcpts
@@ -291,8 +316,7 @@ def _alive(pid: int) -> bool:
 
 
 def running_pid(state_dir: str | Path, name: str = PID_NAME) -> int | None:
-    """PID of the background watcher (or, with name=CHECK_PID_NAME, of a background
-    check), or None. Clears a stale PID file."""
+    """PID of the background watcher, or None. Clears a stale PID file."""
     p = pid_path(state_dir, name)
     if not p.exists():
         return None
@@ -315,15 +339,6 @@ def start_background(config: str | Path, settings: str | Path, state_dir: str | 
         raise RuntimeError(f"already running (PID {pid})")
     args = ["watch"] + ([] if email is None else ["--email" if email else "--no-email"])
     return _spawn(config, settings, state, args, PID_NAME, root, f"background watcher, started from {source}")
-
-
-def start_check_background(config: str | Path, settings: str | Path, state_dir: str | Path,
-                           root: str | Path | None = None, source: str = "ui") -> int:
-    """One `jap r check` round in the background (no email); its progress goes to the log."""
-    state = Path(state_dir).resolve()
-    if (pid := running_pid(state, CHECK_PID_NAME)) is not None:
-        raise RuntimeError(f"a check is already running (PID {pid})")
-    return _spawn(config, settings, state, ["check"], CHECK_PID_NAME, root, source)
 
 
 def _spawn(config, settings, state: Path, args: list[str], pid_name: str, root, source: str) -> int:
