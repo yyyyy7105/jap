@@ -30,6 +30,7 @@ from .report import print_results
 
 LOG_NAME = "watch.log"
 PID_NAME = "watch.pid"
+CHECK_PID_NAME = "check.pid"  # a one-off background check (the UI's Check now)
 ERR_NAME = "watch.err.log"  # Python crashes of the background process (normally empty)
 MAX_LOG_BYTES = 5_000_000  # rotate to watch.log.1 beyond this
 
@@ -38,8 +39,8 @@ def log_path(state_dir: str | Path) -> Path:
     return Path(state_dir) / LOG_NAME
 
 
-def pid_path(state_dir: str | Path) -> Path:
-    return Path(state_dir) / PID_NAME
+def pid_path(state_dir: str | Path, name: str = PID_NAME) -> Path:
+    return Path(state_dir) / name
 
 
 # -- output: terminal + shared log file ---------------------------------------
@@ -122,7 +123,9 @@ class WatchSession:
     """
 
     def __init__(self, config: str | Path, settings: str | Path, state_dir: str | Path, out: Output,
-                 email: bool | None = None, interval: int | None = None, show_all: bool = True):
+                 email: bool | None = None, interval: int | None = None, show_all: bool = True,
+                 source: str = "cli"):
+        self.source = source  # shown in the log: where this run was started from
         self.config, self.settings_path, self.state = Path(config), Path(settings), Path(state_dir)
         self.out, self.email_arg, self.interval_arg, self.show_all = out, email, interval, show_all
         load_dotenv()
@@ -186,10 +189,25 @@ class WatchSession:
 
     # -- one round -------------------------------------------------------------
     def one_round(self, force_digest: bool = False) -> list:
+        self.out.log(f"Check started ({self.source}): {len(self.restaurants)} restaurant(s)"
+                     + (", email on" if self.digest else ""))
+
+        def progress(msg: str, status) -> None:
+            status.update(f"Checking {msg}")
+            if "rate-limited" in msg:  # long waits are worth seeing in the log
+                self.out.log(f"  [yellow]{msg}[/]")
+
+        def done(i, n, res, secs) -> None:
+            if res.error:
+                what = f"[red]error[/] {res.error}"
+            else:
+                what = f"[green]{len(res.slots)} open[/]" if res.slots else "none open"
+            self.out.log(f"  [{i}/{n}] {res.restaurant.name}: {what} ({secs:.0f}s)")
+
         with self.out.status("Checking...") as status:
-            self.checker.progress = lambda m: status.update(f"Checking {m}")
+            self.checker.progress = lambda m: progress(m, status)
             try:
-                results = self.checker.check_all(self.restaurants)
+                results = self.checker.check_all(self.restaurants, on_result=done)
             finally:
                 self.checker.progress = None
         current = [s for res in results for s in res.slots]
@@ -272,9 +290,10 @@ def _alive(pid: int) -> bool:
     return True
 
 
-def running_pid(state_dir: str | Path) -> int | None:
-    """PID of the background watcher, or None. Clears a stale PID file."""
-    p = pid_path(state_dir)
+def running_pid(state_dir: str | Path, name: str = PID_NAME) -> int | None:
+    """PID of the background watcher (or, with name=CHECK_PID_NAME, of a background
+    check), or None. Clears a stale PID file."""
+    p = pid_path(state_dir, name)
     if not p.exists():
         return None
     try:
@@ -289,17 +308,30 @@ def running_pid(state_dir: str | Path) -> int | None:
 
 
 def start_background(config: str | Path, settings: str | Path, state_dir: str | Path,
-                     email: bool | None = True, root: str | Path | None = None) -> int:
+                     email: bool | None = True, root: str | Path | None = None, source: str = "cli") -> int:
     """Start `jap r watch` detached (survives closing the terminal / UI). Returns its PID."""
     state = Path(state_dir).resolve()
     if (pid := running_pid(state)) is not None:
         raise RuntimeError(f"already running (PID {pid})")
+    args = ["watch"] + ([] if email is None else ["--email" if email else "--no-email"])
+    return _spawn(config, settings, state, args, PID_NAME, root, f"background watcher, started from {source}")
+
+
+def start_check_background(config: str | Path, settings: str | Path, state_dir: str | Path,
+                           root: str | Path | None = None, source: str = "ui") -> int:
+    """One `jap r check` round in the background (no email); its progress goes to the log."""
+    state = Path(state_dir).resolve()
+    if (pid := running_pid(state, CHECK_PID_NAME)) is not None:
+        raise RuntimeError(f"a check is already running (PID {pid})")
+    return _spawn(config, settings, state, ["check"], CHECK_PID_NAME, root, source)
+
+
+def _spawn(config, settings, state: Path, args: list[str], pid_name: str, root, source: str) -> int:
     state.mkdir(parents=True, exist_ok=True)
     cmd = [sys.executable, "-m", "jap", "r", "-c", str(Path(config).resolve()), "-s", str(Path(settings).resolve()),
-           "--state-dir", str(state), "watch"]
-    if email is not None:
-        cmd.append("--email" if email else "--no-email")
-    env = os.environ | {"PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1", "JAP_BACKGROUND": "1"}
+           "--state-dir", str(state), *args]
+    env = os.environ | {"PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1", "JAP_BACKGROUND": "1",
+                        "JAP_SOURCE": source}
     kw: dict = {}
     if sys.platform == "win32":
         kw["creationflags"] = (subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
@@ -310,7 +342,7 @@ def start_background(config: str | Path, settings: str | Path, state_dir: str | 
     proc = subprocess.Popen(cmd, cwd=root or Path.cwd(), env=env, stdin=subprocess.DEVNULL,
                             stdout=subprocess.DEVNULL, stderr=err, **kw)
     err.close()
-    pid_path(state).write_text(str(proc.pid), encoding="ascii")
+    pid_path(state, pid_name).write_text(str(proc.pid), encoding="ascii")
     return proc.pid
 
 

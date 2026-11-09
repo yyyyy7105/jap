@@ -432,7 +432,7 @@ def test_watch_reloads_config_when_files_change(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     rounds = []
 
-    def fake_check_all(self, restaurants):
+    def fake_check_all(self, restaurants, on_result=None):
         rounds.append([r.name for r in restaurants])
         self.last_scan = None
         return []
@@ -468,7 +468,7 @@ def test_check_appends_to_shared_log(tmp_path, monkeypatch):
                                      '  [[restaurants.windows]]\n  days = 3\n', encoding="utf-8")
     monkeypatch.chdir(tmp_path)
 
-    def fake_check_all(self, restaurants):
+    def fake_check_all(self, restaurants, on_result=None):
         from jap.restaurants.models import CheckResult
 
         self.last_scan = None

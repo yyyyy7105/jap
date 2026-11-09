@@ -240,7 +240,7 @@ def tab_watcher():
     if c1.button("Start watcher", disabled=bool(pid), width="stretch",
                  help="same as `jap r start`: the watch loop in the background, with email"):
         try:
-            new = watch.start_background(WATCHLIST, SETTINGS, STATE, email=True, root=ROOT)
+            new = watch.start_background(WATCHLIST, SETTINGS, STATE, email=True, root=ROOT, source="ui")
             st.toast(f"Started (PID {new})")
         except RuntimeError as e:
             st.error(str(e))
@@ -251,30 +251,39 @@ def tab_watcher():
             st.rerun()
         except RuntimeError as e:
             st.error(str(e))
-    if c3.button("Check now", width="stretch",
-                 help="same as `jap r check`: one round in the background, no email; result appears in the log"):
-        env = os.environ | {"PYTHONIOENCODING": "utf-8", "JAP_BACKGROUND": "1"}
-        subprocess.Popen([sys.executable, "-m", "jap", "r", "-c", str(WATCHLIST), "-s", str(SETTINGS),
-                          "--state-dir", str(STATE), "check"], cwd=ROOT, env=env,
-                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        st.toast("Checking... the result appears in the log below in a few minutes.")
+    checking = watch.running_pid(STATE, watch.CHECK_PID_NAME)
+    if c3.button("Checking..." if checking else "Check now", width="stretch", disabled=bool(checking),
+                 help="same as `jap r check`: one round in the background, no email. "
+                      "Each restaurant shows up in the log as it finishes."):
+        try:
+            watch.start_check_background(WATCHLIST, SETTINGS, STATE, root=ROOT, source="ui")
+            st.rerun()
+        except RuntimeError as e:
+            st.error(str(e))
     if c4.button("Send test email", width="stretch", help="same as `jap r test-email`: one short message to everyone"):
         with st.spinner("Sending..."):
             st.code(run_jap("test-email"))
     st.caption("Saved changes are picked up by the running watcher automatically (it re-reads both files and checks again).")
 
     st.subheader("Log")
+    st.slider("Lines", 20, 500, 80, step=20, key="log_lines")
+    log_view()
+
+
+@st.fragment(run_every=3)
+def log_view():
+    """The shared log, newest at the bottom; refreshes itself every few seconds."""
     log = watch.log_path(STATE)
-    n = st.slider("Lines", 20, 500, 80, step=20)
+    checking = watch.running_pid(STATE, watch.CHECK_PID_NAME)
+    if checking:
+        st.info(f"A check is running (PID {checking}); each restaurant appears below as it finishes.")
     if log.exists():
         lines = log.read_text(encoding="utf-8", errors="replace").splitlines()
-        st.code("\n".join(lines[-n:]) or "(empty)", language=None)
+        st.code("\n".join(lines[-st.session_state.get("log_lines", 80):]) or "(empty)", language=None)
         st.caption(f"{log} · shared by the CLI and the UI · updated "
-                   f"{datetime.fromtimestamp(log.stat().st_mtime):%Y-%m-%d %H:%M:%S}")
+                   f"{datetime.fromtimestamp(log.stat().st_mtime):%Y-%m-%d %H:%M:%S} · refreshes every 3 s")
     else:
         st.caption("No log yet. It appears after the first check.")
-    st.button("Refresh")
 
 
 # -- settings.toml ---------------------------------------------------------

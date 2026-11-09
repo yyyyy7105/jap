@@ -125,7 +125,8 @@ def run(args) -> int:
     try:
         session = watch.WatchSession(args.config, args.settings, state, out, email=email,
                                      interval=getattr(args, "interval", None),
-                                     show_all=not getattr(args, "new_only", False))
+                                     show_all=not getattr(args, "new_only", False),
+                                     source=os.environ.get("JAP_SOURCE", "cli"))
     except (ConfigError, NotifyError) as e:
         out.log(f"[red]Config error:[/] {e}")
         out.close()

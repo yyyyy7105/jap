@@ -50,14 +50,18 @@ class Checker:
         except Exception as e:  # keep the run going for other restaurants
             return CheckResult(r, error=f"{type(e).__name__}: {e}")
 
-    def check_all(self, restaurants: list[Restaurant]) -> list[CheckResult]:
+    def check_all(self, restaurants: list[Restaurant], on_result=None) -> list[CheckResult]:
+        """on_result(i, total, result, seconds) is called as each restaurant finishes."""
         started = datetime.now().astimezone()
         ranges = {r.name: describe_windows(r) for r in restaurants}  # fix rolling windows at scan start
         out = []
         for i, r in enumerate(restaurants, 1):
             self._prefix = f"[{i}/{len(restaurants)}]"
             self._emit(f"{r.name} ({r.platform})")
+            t0 = datetime.now()
             out.append(self.check_one(r))
+            if on_result:
+                on_result(i, len(restaurants), out[-1], (datetime.now() - t0).total_seconds())
         self._prefix = ""
         self.last_scan = ScanInfo(started, datetime.now().astimezone(), ranges)
         return out

@@ -54,7 +54,8 @@ Seen slots are kept in `.state/seen_slots.json`. Use
 `-c` / `-s` to point at other watchlist / settings files.
 
 **One log:** every check, from the CLI (`check`, `digest`, `watch`, `start`) or the UI, is appended to
-`.state/watch.log`. It holds the same tables you see in the terminal, plus timestamped lines for
+`.state/watch.log`: a "Check started (cli / ui / background ...)" line, one line per restaurant as it finishes,
+rate-limit waits, then the same tables you see in the terminal, plus timestamped lines for
 emails sent, config reloads and errors. It rolls over to `watch.log.1` past 5 MB.
 
 **Code layout:** `src/jap/restaurants/` holds the shared core (`watch.py` is the watch loop, logging and
