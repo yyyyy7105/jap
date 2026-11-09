@@ -39,6 +39,16 @@ uv run jap r status                        # running? + the end of the log
 uv run jap r stop                          # stop the background watcher
 ```
 
+**Make shortcuts** (`make help` lists them; on Windows without `make`, use `mingw32-make` from MSYS2 or
+`choco install make`):
+
+```bash
+make start      # = jap r start      make stop / restart / status
+make check      # = jap r check      make watch / list / digest / test-email
+make ui         # the UI, always on 0.0.0.0 (your whole network), port 8501 (PORT=... to change)
+make sync       # uv sync --extra ui  make test
+```
+
 On each run, slots you haven't seen before are marked **NEW**; `--new-only` hides the rest.
 Seen slots are kept in `.state/seen_slots.json`. Use
 `-c` / `-s` to point at other watchlist / settings files.
@@ -160,12 +170,8 @@ uv run jap r test-email                 # test message to everyone any restauran
 uv run jap r test-email --to family     # ...or just a group / address
 ```
 
-Run it in the background on Windows (keeps going after the terminal closes; stops at logoff or restart):
-
-```powershell
-.\start-watch.ps1     # = jap r start: the watcher hidden in the background; PID in .state\watch.pid, log in .state\watch.log
-.\stop-watch.ps1      # = jap r stop
-```
+Run it in the background (keeps going after the terminal closes; stops at logoff or restart):
+`make start` / `make stop` (= `jap r start` / `jap r stop`; PID in `.state/watch.pid`, log in `.state/watch.log`).
 
 - With `send_at` set, `watch` wakes up for it, runs a fresh check, then sends. The countdown shows the next digest time.
   If the computer was asleep at `send_at`, the digest goes out on the first check after it wakes.
