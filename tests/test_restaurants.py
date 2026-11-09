@@ -424,7 +424,7 @@ def test_watch_reloads_config_when_files_change(tmp_path, monkeypatch):
     """Saving the watchlist (e.g. from the UI) is picked up by a running `watch` without a restart."""
     from jap import main
     from jap.restaurants import checker as checker_mod
-    from jap.restaurants import cli
+    from jap.restaurants import watch
 
     w = tmp_path / "w.toml"
     entry = '[[restaurants]]\nname = "{0}"\nurl = "https://www.tablecheck.com/en/shops/{0}/reserve"\n  [[restaurants.windows]]\n  days = 3\n'
@@ -439,7 +439,7 @@ def test_watch_reloads_config_when_files_change(tmp_path, monkeypatch):
 
     waits = []
 
-    def fake_wait(seconds, digest_at=None, stop_early=None):
+    def fake_wait(out, seconds, digest_at=None, stop_early=None):
         waits.append(1)
         if len(waits) == 1:  # while waiting, the file is saved with a second restaurant
             w.write_text(entry.format("one") + entry.format("two"), encoding="utf-8")
@@ -452,7 +452,30 @@ def test_watch_reloads_config_when_files_change(tmp_path, monkeypatch):
         raise KeyboardInterrupt
 
     monkeypatch.setattr(checker_mod.Checker, "check_all", fake_check_all)
-    monkeypatch.setattr(cli, "wait_with_countdown", fake_wait)
-    monkeypatch.setattr(cli.time, "sleep", lambda s: None)
+    monkeypatch.setattr(watch, "wait_with_countdown", fake_wait)
+    monkeypatch.setattr(watch.time, "sleep", lambda s: None)
     assert main(["r", "-c", "w.toml", "-s", "none.toml", "watch", "--no-email"]) == 0
     assert rounds == [["one"], ["one", "two"], ["one", "two"]]
+
+
+def test_check_appends_to_shared_log(tmp_path, monkeypatch):
+    """CLI runs write the same .state/watch.log the background watcher and the UI use."""
+    from jap import main
+    from jap.restaurants import checker as checker_mod
+    from jap.restaurants import watch
+
+    (tmp_path / "w.toml").write_text('[[restaurants]]\nname = "Logme"\nurl = "https://www.tablecheck.com/en/shops/x/reserve"\n'
+                                     '  [[restaurants.windows]]\n  days = 3\n', encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    def fake_check_all(self, restaurants):
+        from jap.restaurants.models import CheckResult
+
+        self.last_scan = None
+        return [CheckResult(restaurants[0], [], None)]
+
+    monkeypatch.setattr(checker_mod.Checker, "check_all", fake_check_all)
+    assert main(["r", "-c", "w.toml", "-s", "none.toml", "check"]) == 0
+    assert main(["r", "-c", "w.toml", "-s", "none.toml", "check"]) == 0
+    text = watch.log_path(tmp_path / ".state").read_text(encoding="utf-8")
+    assert text.count("Restaurant availability") == 2 and "Logme" in text

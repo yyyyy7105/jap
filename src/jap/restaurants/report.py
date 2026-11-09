@@ -19,7 +19,10 @@ def print_results(
     new_keys: set[str] | None = None,
     show_all: bool = True,
     scan: ScanInfo | None = None,
+    console=console,
 ) -> None:
+    """Print the round's summary and open slots to `console` (a rich Console, or a
+    watch.Output, which also appends to the shared log)."""
     console.rule(f"[bold]Restaurant availability[/] · {(scan.started if scan else datetime.now()):%Y-%m-%d %H:%M:%S}")
     summary = Table(show_header=True, header_style="bold", box=None, pad_edge=False)
     summary.add_column("Restaurant")

@@ -1,7 +1,7 @@
 """Streamlit UI: edit settings.toml and watchlist.toml, start/stop the watcher, read its log.
 
 Run with:  uv run --extra ui jap r ui
-(or directly: uv run --extra ui streamlit run src/jap/restaurants/ui.py)
+(or directly: uv run --extra ui streamlit run src/jap/restaurants/ui/app.py)
 
 Every option the tool understands has a field here. Fields show the value in the
 file, or the built-in default when the file doesn't set it. Saving validates with
@@ -23,6 +23,7 @@ from pathlib import Path
 import streamlit as st
 import tomlkit
 
+from jap.restaurants import watch
 from jap.restaurants.config import PLATFORMS, ConfigError, detect_platform, id_from_url, load_watchlist
 from jap.restaurants.notify import EmailConfig, NotifyError
 
@@ -30,8 +31,6 @@ ROOT = Path(os.environ.get("JAP_ROOT", Path.cwd()))
 WATCHLIST = ROOT / os.environ.get("JAP_WATCHLIST", "watchlist.toml")
 SETTINGS = ROOT / os.environ.get("JAP_SETTINGS", "settings.toml")
 STATE = ROOT / os.environ.get("JAP_STATE", ".state")
-PID_FILE = STATE / "watch.pid"
-LOG_FILE = STATE / "watch.log"
 
 # built-in defaults (what the tool uses when a key is missing)
 D_SETTINGS = {"interval_seconds": 600, "request_delay": 0.4, "headless": True}
@@ -222,60 +221,59 @@ def windows_aot(windows: list[dict], where: str):
     return aot
 
 
-# -- watcher control -------------------------------------------------------
-def watcher_pid() -> int | None:
-    if not PID_FILE.exists():
-        return None
-    try:
-        pid = int(PID_FILE.read_text().strip())
-    except ValueError:
-        return None
-    out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True).stdout
-    return pid if str(pid) in out else None
-
-
-def run_ps(script: str) -> str:
-    r = subprocess.run(
-        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ROOT / script)],
-        capture_output=True, text=True, cwd=ROOT,
-    )
-    return (r.stdout + r.stderr).strip()
-
-
+# -- watcher control (shared with the CLI: jap.restaurants.watch) ---------------
 def run_jap(*args: str, timeout: int = 120) -> str:
     env = os.environ | {"PYTHONIOENCODING": "utf-8", "COLUMNS": "120"}
-    r = subprocess.run([sys.executable, "-m", "jap", "r", *args], capture_output=True, text=True,
+    r = subprocess.run([sys.executable, "-m", "jap", "r", "-c", str(WATCHLIST), "-s", str(SETTINGS),
+                        "--state-dir", str(STATE), *args], capture_output=True, text=True,
                        encoding="utf-8", errors="replace", cwd=ROOT, env=env, timeout=timeout)
     return (r.stdout + r.stderr).strip()
 
 
 def tab_watcher():
-    pid = watcher_pid()
+    pid = watch.running_pid(STATE)
     if pid:
         st.success(f"Watcher is running (PID {pid}).")
     else:
         st.info("Watcher is not running.")
-    c1, c2, c3 = st.columns(3)
+    c1, c2, c3, c4 = st.columns(4)
     if c1.button("Start watcher", disabled=bool(pid), width="stretch",
-                 help="start-watch.ps1: `jap r watch --email` in the background"):
-        st.code(run_ps("start-watch.ps1") or "started")
+                 help="same as `jap r start`: the watch loop in the background, with email"):
+        try:
+            new = watch.start_background(WATCHLIST, SETTINGS, STATE, email=True, root=ROOT)
+            st.toast(f"Started (PID {new})")
+        except RuntimeError as e:
+            st.error(str(e))
         st.rerun()
-    if c2.button("Stop watcher", disabled=not pid, width="stretch", help="stop-watch.ps1"):
-        st.code(run_ps("stop-watch.ps1"))
-        st.rerun()
-    if c3.button("Send test email", width="stretch", help="`jap r test-email`: one short message to everyone"):
+    if c2.button("Stop watcher", disabled=not pid, width="stretch", help="same as `jap r stop`"):
+        try:
+            watch.stop_background(STATE)
+            st.rerun()
+        except RuntimeError as e:
+            st.error(str(e))
+    if c3.button("Check now", width="stretch",
+                 help="same as `jap r check`: one round in the background, no email; result appears in the log"):
+        env = os.environ | {"PYTHONIOENCODING": "utf-8", "JAP_BACKGROUND": "1"}
+        subprocess.Popen([sys.executable, "-m", "jap", "r", "-c", str(WATCHLIST), "-s", str(SETTINGS),
+                          "--state-dir", str(STATE), "check"], cwd=ROOT, env=env,
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        st.toast("Checking... the result appears in the log below in a few minutes.")
+    if c4.button("Send test email", width="stretch", help="same as `jap r test-email`: one short message to everyone"):
         with st.spinner("Sending..."):
             st.code(run_jap("test-email"))
     st.caption("Saved changes are picked up by the running watcher automatically (it re-reads both files and checks again).")
 
     st.subheader("Log")
+    log = watch.log_path(STATE)
     n = st.slider("Lines", 20, 500, 80, step=20)
-    if LOG_FILE.exists():
-        lines = LOG_FILE.read_text(encoding="utf-8", errors="replace").splitlines()
+    if log.exists():
+        lines = log.read_text(encoding="utf-8", errors="replace").splitlines()
         st.code("\n".join(lines[-n:]) or "(empty)", language=None)
-        st.caption(f"{LOG_FILE} · updated {datetime.fromtimestamp(LOG_FILE.stat().st_mtime):%Y-%m-%d %H:%M:%S}")
+        st.caption(f"{log} · shared by the CLI and the UI · updated "
+                   f"{datetime.fromtimestamp(log.stat().st_mtime):%Y-%m-%d %H:%M:%S}")
     else:
-        st.caption("No log yet. It appears once the watcher has been started.")
+        st.caption("No log yet. It appears after the first check.")
     st.button("Refresh")
 
 
@@ -299,7 +297,7 @@ def tab_settings():
         st.subheader("Email")
         c1, c2 = st.columns(2)
         enabled = c1.checkbox("Email on by default for `watch`", value=bool(e["enabled"]),
-                              help="enabled (default off). Off: only `watch --email` sends. start-watch.ps1 always passes --email.")
+                              help="enabled (default off). Off: only `watch --email` sends. Start (UI) / `jap r start` always email.")
         send_empty = c2.checkbox("Daily digest also on days with nothing open", value=bool(e["send_empty"]),
                                  help="send_empty (default on). Only matters when the daily digest is on.")
         at = str(e["send_at"]).strip().lower()
@@ -354,7 +352,7 @@ def tab_settings():
     commented(t, "headless", bool(headless), "OMAKASE browser runs hidden, default true")
     doc.add("settings", t)
     m = tomlkit.table()
-    commented(m, "enabled", bool(enabled), "true = `watch` emails without --email (start-watch.ps1 always passes it)")
+    commented(m, "enabled", bool(enabled), "true = `jap r watch` emails without --email (Start / `jap r start` always email)")
     commented(m, "send_at", digest_time.strftime("%H:%M") if digest_on else "off",
               'daily digest time (HH:MM, this computer\'s clock) or "off" (default) = only email new slots')
     commented(m, "send_empty", bool(send_empty), "digest also on days with nothing open, default true")

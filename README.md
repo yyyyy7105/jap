@@ -33,12 +33,23 @@ cp watchlist.example.toml watchlist.toml
 cp settings.example.toml settings.toml
 uv run jap r list                          # restaurants, windows and who gets emailed
 uv run jap r check                         # check once
-uv run jap r watch                         # check repeatedly; NEW slots are highlighted
+uv run jap r watch                         # check repeatedly in this terminal; NEW slots are highlighted
+uv run jap r start                         # the same watcher in the background, with email (PID in .state/watch.pid)
+uv run jap r status                        # running? + the end of the log
+uv run jap r stop                          # stop the background watcher
 ```
 
 On each run, slots you haven't seen before are marked **NEW**; `--new-only` hides the rest.
 Seen slots are kept in `.state/seen_slots.json`. Use
 `-c` / `-s` to point at other watchlist / settings files.
+
+**One log:** every check, from the CLI (`check`, `digest`, `watch`, `start`) or the UI, is appended to
+`.state/watch.log`. It holds the same tables you see in the terminal, plus timestamped lines for
+emails sent, config reloads and errors. It rolls over to `watch.log.1` past 5 MB.
+
+**Code layout:** `src/jap/restaurants/` holds the shared core (`watch.py` is the watch loop, logging and
+background start/stop; plus `config.py`, `checker.py`, `notify.py`, `providers/`). The two front ends
+only call into it: `cli/` (the `jap r ...` commands) and `ui/` (the Streamlit app).
 
 ### UI (optional)
 
@@ -49,7 +60,8 @@ uv sync --extra ui
 uv run jap r ui                            # opens http://localhost:8501, also reachable from your network (--host 127.0.0.1 = this PC only)
 ```
 
-- **Watcher**: running or not, Start / Stop (the same as `start-watch.ps1` / `stop-watch.ps1`), send a test email, the log.
+- **Watcher**: running or not, Start / Stop (the same as `jap r start` / `jap r stop`), Check now (`jap r check`),
+  send a test email, and the shared log.
 - **Settings (settings.toml)**: every `[settings]` and `[email]` option, plus recipient groups.
 - **Watchlist (watchlist.toml)**: `[defaults]` (party size, notify, windows) and each restaurant: name, enabled,
   URL / platform / id, party size, notify, windows, and the platform's own options. Add and delete restaurants.
@@ -151,8 +163,8 @@ uv run jap r test-email --to family     # ...or just a group / address
 Run it in the background on Windows (keeps going after the terminal closes; stops at logoff or restart):
 
 ```powershell
-.\start-watch.ps1     # starts `jap r watch --email` hidden; PID in .state\watch.pid, output in .state\watch.log
-.\stop-watch.ps1      # stops it (and the python process under uv) and removes the PID file
+.\start-watch.ps1     # = jap r start: the watcher hidden in the background; PID in .state\watch.pid, log in .state\watch.log
+.\stop-watch.ps1      # = jap r stop
 ```
 
 - With `send_at` set, `watch` wakes up for it, runs a fresh check, then sends. The countdown shows the next digest time.
